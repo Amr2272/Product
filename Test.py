@@ -5,14 +5,18 @@ import plotly.express as px
 
 @st.cache_data
 def load_data():
-
+    """
+    Attempts to load data from 'Data.zip'. If unsuccessful, generates mock data.
+    """
     try:
-   
+        # Attempt to load user data file
         train = pd.read_csv('Data.zip')
-        st.success("تم تحميل البيانات بنجاح من ملف Data.zip.")
+        st.success("Data loaded successfully from Data.zip.")
     except FileNotFoundError:
-        st.warning("لم يتم العثور على ملف 'Data.zip'. جاري توليد بيانات وهمية للعرض.")
+        # Generate mock data if file not found
+        st.warning("File 'Data.zip' not found. Generating mock data for display.")
         
+        # --- Mock Data Generation ---
         dates = pd.date_range(start='2020-01-01', end='2022-12-31', freq='D')
         states = ['Pichincha', 'Guayas', 'Azuay', 'Manabi', 'El Oro']
         state_data = []
@@ -34,27 +38,24 @@ def load_data():
 
         train = pd.DataFrame(state_data, columns=['date', 'state', 'city', 'sales'])
 
-  
-    train["date"] = pd.to_datetime(train["date"], errors="coerce")
+    # --- Data Preprocessing Steps ---
     
+    train["date"] = pd.to_datetime(train["date"], errors="coerce")
     train = train.dropna(subset=['date'])
 
-   
     train = train.set_index("date")
-   
     train.index = pd.to_datetime(train.index)
 
     min_date = train.index.min().date()
     max_date = train.index.max().date()
     
-   
     sort_state = train.groupby('state')['sales'].sum().sort_values(ascending=False)
 
     return train, min_date, max_date, sort_state
 
 def run_dashboard():
     """
-    الدالة الرئيسية لتشغيل تطبيق Streamlit.
+    Main function to run the Streamlit application dashboard.
     """
     
     train, min_date, max_date, sort_state = load_data()
@@ -62,16 +63,16 @@ def run_dashboard():
     
     st.set_page_config(layout="wide", page_title="City Sales Dashboard", page_icon="📊")
 
-   
-    st.title("City Sales Dashboard: لوحة تحكم مبيعات المدن")
+    
+    st.title("City Sales Dashboard")
 
     
     with st.sidebar:
-        st.header("Dashboard Controls | عناصر التحكم")
+        st.header("Dashboard Controls")
 
         
         col_chosen = st.multiselect(
-            "Choose State | اختر الولاية",
+            "Choose State",
             options=sort_state.index.tolist(),
             default=['Pichincha'],
             key='state_id',
@@ -80,7 +81,7 @@ def run_dashboard():
 
 
         agg_method = st.radio(
-            "Aggregate | طريقة التجميع",
+            "Aggregate Method",
             options=['sum', 'mean'],
             index=0,  
             horizontal=True,
@@ -88,10 +89,10 @@ def run_dashboard():
         )
 
         st.markdown("---")
-        st.subheader("Date Range Selection | تحديد نطاق التاريخ")
+        st.subheader("Date Range Selection")
 
         date_range = st.date_input(
-            "Select Date Range | اختر نطاقًا زمنيًا",
+            "Select Date Range",
             value=[min_date, max_date],
             min_value=min_date,
             max_value=max_date,
@@ -108,9 +109,10 @@ def run_dashboard():
         st.caption(f"Selected range: **{start_date.strftime('%d-%m-%Y')}** → **{end_date.strftime('%d-%m-%Y')}**")
 
 
+    # --- Graph Logic ---
 
     if not col_chosen:
-        st.warning("رجاءً، اختر ولاية واحدة على الأقل لعرض بيانات المبيعات.")
+        st.warning("Please select at least one state to view sales data.")
         return
 
     start_date = pd.to_datetime(start_date)
@@ -125,8 +127,8 @@ def run_dashboard():
         filterr = train[mask]
 
         if filterr.empty:
-            st.warning("لم يتم العثور على بيانات لنطاق التاريخ والفلاتر المحددة.")
-            fig = px.bar(title="لا توجد بيانات للفلاتر المختارة")
+            st.warning("No data found for the selected date range and filters.")
+            fig = px.bar(title="No Data for Selected Filters")
 
         else:
             if agg_method == 'mean':
@@ -136,16 +138,16 @@ def run_dashboard():
 
             fig = px.bar(
                 city_sales, x='city', y='sales',
-                labels={'city': 'المدينة', 'sales': f'المبيعات ({agg_method.capitalize()})'},
-                title=f'مبيعات المدن للولايات المختارة ({agg_method.capitalize()})',
+                labels={'city': 'City', 'sales': f'Sales ({agg_method.capitalize()})'},
+                title=f'City Sales for Selected States ({agg_method.capitalize()})',
                 text=city_sales['sales'].apply(lambda x: f'{x:,.0f}'), 
                 color_discrete_sequence=["#1abc9c"]
             )
 
             fig.update_traces(
                 textposition='outside',
-                hovertemplate="<b>المدينة:</b> %{x}<br>" +
-                              "<b>المبيعات:</b> %{y:,.2f}<br>" +
+                hovertemplate="<b>City:</b> %{x}<br>" +
+                              "<b>Sales:</b> %{y:,.2f}<br>" +
                               "<extra></extra>"
             )
             fig.update_yaxes(tickformat=".2s", title_font=dict(size=14))
@@ -157,7 +159,7 @@ def run_dashboard():
         st.plotly_chart(fig, use_container_width=True)
 
     except Exception as e:
-        st.error(f"حدث خطأ أثناء معالجة البيانات: {str(e)}")
+        st.error(f"An error occurred while processing data: {str(e)}")
 
 
 if __name__ == '__main__':
