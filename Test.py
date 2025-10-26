@@ -66,6 +66,11 @@ def run_dashboard():
     
     st.title("City Sales Dashboard")
 
+    # Display the head of the data
+    st.subheader("Raw Data Sample (Head)")
+    st.dataframe(train.head())
+    st.markdown("---")
+
     
     with st.sidebar:
         st.header("Dashboard Controls")
