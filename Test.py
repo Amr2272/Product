@@ -11,6 +11,7 @@ import plotly.graph_objects as go
 st.set_page_config(layout="wide", page_title="Data Analysis & Forecast App", page_icon="📊")
 MODEL_PATH = 'prophet.pkl'
 
+
 @st.cache_data
 def load_data():
     """
@@ -18,6 +19,7 @@ def load_data():
     The output is a tuple containing: (Main DataFrame, min_date, max_date, sort_state, Prophet_DF)
     """
     try:
+
         train = pd.read_csv('Data.zip')
         st.success("Data loaded successfully from Data.zip.")
     except FileNotFoundError:
@@ -81,7 +83,6 @@ def load_data():
     return train, min_date, max_date, sort_state, prophet_df
 
 
-
 @st.cache_resource
 def load_prophet_model(path):
     if os.path.exists(path):
@@ -96,6 +97,7 @@ def load_prophet_model(path):
     else:
         st.error(f"Model file not found at: {path}")
         return None
+
 
 
 def run_dashboard(train, min_date, max_date, sort_state):
@@ -202,6 +204,8 @@ def run_dashboard(train, min_date, max_date, sort_state):
             else:
                 city_sales = filterr.groupby('city')['sales'].sum().reset_index()
 
+            city_sales['sales'] = pd.to_numeric(city_sales['sales'], errors='coerce').fillna(0)
+
             fig = px.bar(
                 city_sales, x='city', y='sales',
                 labels={'city': 'City', 'sales': f'Sales ({agg_method.capitalize()})'},
@@ -221,13 +225,18 @@ def run_dashboard(train, min_date, max_date, sort_state):
         st.error(f"An error occurred while processing data: {str(e)}")
 
 
-
 def run_forecast_app(model, prophet_df):
     """
     Runs the Prophet forecasting interface.
+    Modified to use st.session_state to persist forecast results.
     """
     st.title("📈 Time Series Forecasting (Prophet)")
     
+    if 'forecast_data' not in st.session_state:
+        st.session_state.forecast_data = None
+        st.session_state.forecast_future_data = None
+        st.session_state.model_fit = None
+
     if model is None or prophet_df.empty:
         st.error("Prophet model or historical data is missing. Cannot run forecast.")
         return
@@ -239,85 +248,105 @@ def run_forecast_app(model, prophet_df):
     
     st.sidebar.info(f"Last historical date: **{last_train_date.strftime('%Y-%m-%d')}**")
 
+    min_date_val = min_date_for_forecast.date()
+
     forecast_end_date = st.sidebar.date_input(
         "Select Forecast End Date:",
-        value=min_date_for_forecast + timedelta(days=30),
-        min_value=min_date_for_forecast.date(),
-        max_value=min_date_for_forecast.date() + timedelta(days=365),
+        value=min_date_val + timedelta(days=30),
+        min_value=min_date_val,
+        max_value=min_date_val + timedelta(days=365),
         key='date_id_forecast'
     )
 
-    if forecast_end_date >= min_date_for_forecast.date():
+    if forecast_end_date >= min_date_val:
         periods = (pd.to_datetime(forecast_end_date) - last_train_date).days
         st.sidebar.success(f"Forecasting **{periods}** days.")
     else:
         periods = 0
         st.sidebar.warning("Please select an end date after the last training date.")
         
+    
     if st.sidebar.button("🚀 Run Forecast", key='forecast_button'):
         if periods > 0:
-            st.header("Forecast Results")
             
             with st.spinner('Generating forecast...'):
                 future = model.make_future_dataframe(periods=periods)
+              
                 forecast = model.predict(future)
                 
-                forecast_future = forecast[forecast['ds'] > last_train_date].copy()
+                st.session_state.forecast_data = forecast
+                st.session_state.forecast_future_data = forecast[forecast['ds'] > last_train_date].copy()
+                st.session_state.model_fit = model 
 
-            st.subheader("Forecast Table (Future Days)")
-            st.dataframe(
-                forecast_future[['ds', 'yhat', 'yhat_lower', 'yhat_upper']].rename(
-                    columns={'ds': 'Date', 'yhat': 'Forecast Value', 'yhat_lower': 'Lower Bound', 'yhat_upper': 'Upper Bound'}
-                ).set_index('Date'),
-                use_container_width=True
-            )
-
-            st.subheader("Forecast Visualization")
-
-            fig = go.Figure()
-
-            fig.add_trace(go.Scatter(
-                x=prophet_df['ds'],
-                y=prophet_df['y'],
-                mode='markers',
-                name='Historical Data (Actual)',
-                marker=dict(color='blue', size=4)
-            ))
-            
-            fig.add_trace(go.Scatter(
-                x=forecast['ds'],
-                y=forecast['yhat'],
-                mode='lines',
-                name='Forecast (Predicted)',
-                line=dict(color='#1abc9c', width=2)
-            ))
-            
-            fig.add_trace(go.Scatter(
-                x=pd.concat([forecast['ds'], forecast['ds'].iloc[::-1]]),
-                y=pd.concat([forecast['yhat_upper'], forecast['yhat_lower'].iloc[::-1]]),
-                fill='toself',
-                fillcolor='rgba(27, 188, 156, 0.2)',
-                line=dict(color='rgba(255,255,255,0)'),
-                hoverinfo="skip",
-                name='80% Confidence Interval'
-            ))
-
-            fig.update_layout(
-                title='Historical Data and Future Forecast',
-                xaxis_title='Date',
-                yaxis_title='Value',
-                title_font_size=20
-            )
-            
-            st.plotly_chart(fig, use_container_width=True)
-
-            st.subheader("Model Components")
-            fig_components = model.plot_components(forecast)
-            st.write(fig_components)
-            
+            st.success("Forecast generated successfully!")
         else:
             st.error("Please select a valid forecast period.")
 
+
+    if st.session_state.forecast_data is not None:
+        
+        forecast_data = st.session_state.forecast_data
+        forecast_future = st.session_state.forecast_future_data
+        model_fit = st.session_state.model_fit
+        
+        st.header("Forecast Results")
+        
+        st.subheader("Forecast Table (Future Days)")
+        if not forecast_future.empty:
+            st.dataframe(
+                forecast_future[['ds', 'yhat', 'yhat_lower', 'yhat_upper']].rename(
+                    columns={'ds': 'Date', 'yhat': 'Forecast Value', 'yhat_lower': 'Lower Bound', 'yhat_upper': 'Upper Bound'}
+                ).set_index('Date').style.format({'Forecast Value': "{:,.0f}", 'Lower Bound': "{:,.0f}", 'Upper Bound': "{:,.0f}"}),
+                use_container_width=True
+            )
+        else:
+            st.warning("No future dates found in the forecast data. Check the selected end date.")
+
+        st.subheader("Forecast Visualization")
+
+        fig = go.Figure()
+
+        fig.add_trace(go.Scatter(
+            x=prophet_df['ds'],
+            y=prophet_df['y'],
+            mode='markers',
+            name='Historical Data (Actual)',
+            marker=dict(color='blue', size=4)
+        ))
+        
+        fig.add_trace(go.Scatter(
+            x=forecast_data['ds'],
+            y=forecast_data['yhat'],
+            mode='lines',
+            name='Forecast (Predicted)',
+            line=dict(color='#1abc9c', width=2)
+        ))
+        
+        fig.add_trace(go.Scatter(
+            x=pd.concat([forecast_data['ds'], forecast_data['ds'].iloc[::-1]]),
+            y=pd.concat([forecast_data['yhat_upper'], forecast_data['yhat_lower'].iloc[::-1]]),
+            fill='toself',
+            fillcolor='rgba(27, 188, 156, 0.2)',
+            line=dict(color='rgba(255,255,255,0)'),
+            hoverinfo="skip",
+            name='80% Confidence Interval'
+        ))
+
+        fig.update_layout(
+            title='Historical Data and Future Forecast',
+            xaxis_title='Date',
+            yaxis_title='Value',
+            title_font_size=20
+        )
+        
+        st.plotly_chart(fig, use_container_width=True)
+
+        st.subheader("Model Components")
+        fig_components = model_fit.plot_components(forecast_data)
+        st.write(fig_components)
+        
+    elif periods > 0:
+        st.info("Click the '🚀 Run Forecast' button to generate the prediction.")
 
 
 
@@ -332,7 +361,8 @@ if __name__ == '__main__':
     )
 
     if app_mode == "City Sales Dashboard":
+        if 'forecast_data' in st.session_state:
+            st.session_state.forecast_data = None
         run_dashboard(train, min_date, max_date, sort_state)
     elif app_mode == "Time Series Forecast":
         run_forecast_app(model, prophet_df)
-
