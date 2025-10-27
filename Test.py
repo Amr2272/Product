@@ -11,20 +11,11 @@ import plotly.graph_objects as go
 st.set_page_config(layout="wide", page_title="Data Analysis & Forecast App", page_icon="📊")
 MODEL_PATH = 'prophet.pkl'
 
-
 @st.cache_data
 def load_data():
-    """
-    Attempts to load data from 'Data.zip'. If unsuccessful, generates mock data.
-    The output is a tuple containing: (Main DataFrame, min_date, max_date, sort_state, Prophet_DF)
-    """
     try:
-
         train = pd.read_csv('Data.zip')
-        st.success("Data loaded successfully from Data.zip.")
     except FileNotFoundError:
-        st.warning("File 'Data.zip' not found. Generating mock data for display.")
-        
         dates = pd.date_range(start='2020-01-01', end='2022-12-31', freq='D')
         
         states = ['Pichincha', 'Guayas', 'Azuay', 'Manabi', 'El Oro']
@@ -89,21 +80,14 @@ def load_prophet_model(path):
         try:
             with open(path, 'rb') as f:
                 model = pickle.load(f)
-            st.success("Prophet model loaded successfully.")
             return model
-        except Exception as e:
-            st.error(f"Error loading Prophet model: {e}")
+        except Exception:
             return None
     else:
-        st.error(f"Model file not found at: {path}")
         return None
 
 
-
 def run_dashboard(train, min_date, max_date, sort_state):
-    """
-    Main function to run the Streamlit application dashboard (Original Code).
-    """
     st.title("City Sales Dashboard")
 
     st.subheader("Data Summary (Unique Values)")
@@ -226,10 +210,6 @@ def run_dashboard(train, min_date, max_date, sort_state):
 
 
 def run_forecast_app(model, prophet_df):
-    """
-    Runs the Prophet forecasting interface.
-    Modified to use st.session_state to persist forecast results.
-    """
     st.title("📈 Time Series Forecasting (Prophet)")
     
     if 'forecast_data' not in st.session_state:
@@ -254,7 +234,7 @@ def run_forecast_app(model, prophet_df):
         "Select Forecast End Date:",
         value=min_date_val + timedelta(days=30),
         min_value=min_date_val,
-        max_value=min_date_val + timedelta(days=365),
+        max_value=min_date_val + timedelta(days=365*2), 
         key='date_id_forecast'
     )
 
@@ -271,11 +251,13 @@ def run_forecast_app(model, prophet_df):
             
             with st.spinner('Generating forecast...'):
                 future = model.make_future_dataframe(periods=periods)
-              
                 forecast = model.predict(future)
                 
+                last_train_date_only = last_train_date.date()
+                forecast_future = forecast[forecast['ds'].dt.date > last_train_date_only].copy()
+                
                 st.session_state.forecast_data = forecast
-                st.session_state.forecast_future_data = forecast[forecast['ds'] > last_train_date].copy()
+                st.session_state.forecast_future_data = forecast_future
                 st.session_state.model_fit = model 
 
             st.success("Forecast generated successfully!")
@@ -306,6 +288,7 @@ def run_forecast_app(model, prophet_df):
 
         fig = go.Figure()
 
+        
         fig.add_trace(go.Scatter(
             x=prophet_df['ds'],
             y=prophet_df['y'],
@@ -314,6 +297,7 @@ def run_forecast_app(model, prophet_df):
             marker=dict(color='blue', size=4)
         ))
         
+        
         fig.add_trace(go.Scatter(
             x=forecast_data['ds'],
             y=forecast_data['yhat'],
@@ -321,6 +305,7 @@ def run_forecast_app(model, prophet_df):
             name='Forecast (Predicted)',
             line=dict(color='#1abc9c', width=2)
         ))
+
         
         fig.add_trace(go.Scatter(
             x=pd.concat([forecast_data['ds'], forecast_data['ds'].iloc[::-1]]),
@@ -347,7 +332,6 @@ def run_forecast_app(model, prophet_df):
         
     elif periods > 0:
         st.info("Click the '🚀 Run Forecast' button to generate the prediction.")
-
 
 
 if __name__ == '__main__':
