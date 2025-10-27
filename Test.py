@@ -281,7 +281,7 @@ def run_forecast_app(model, prophet_df):
                 y=prophet_df['y'],
                 mode='markers',
                 name='Historical Data (Actual)',
-                marker=dict(color='black', size=4)
+                marker=dict(color='blue', size=4)
             ))
             
             fig.add_trace(go.Scatter(
@@ -335,3 +335,4 @@ if __name__ == '__main__':
         run_dashboard(train, min_date, max_date, sort_state)
     elif app_mode == "Time Series Forecast":
         run_forecast_app(model, prophet_df)
+
