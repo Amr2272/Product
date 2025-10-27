@@ -2,36 +2,40 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
+import pickle
+from prophet import Prophet
+from datetime import date, timedelta
+import os
+import plotly.graph_objects as go
+
+st.set_page_config(layout="wide", page_title="Data Analysis & Forecast App", page_icon="📊")
+MODEL_PATH = 'prophet.pkl'
 
 @st.cache_data
 def load_data():
     """
     Attempts to load data from 'Data.zip'. If unsuccessful, generates mock data.
+    The output is a tuple containing: (Main DataFrame, min_date, max_date, sort_state, Prophet_DF)
     """
     try:
-        # Attempt to load user data file
         train = pd.read_csv('Data.zip')
         st.success("Data loaded successfully from Data.zip.")
     except FileNotFoundError:
-        # Generate mock data if file not found
         st.warning("File 'Data.zip' not found. Generating mock data for display.")
         
-        # --- Mock Data Generation based on provided image columns ---
         dates = pd.date_range(start='2020-01-01', end='2022-12-31', freq='D')
-        n_days = len(dates)
         
         states = ['Pichincha', 'Guayas', 'Azuay', 'Manabi', 'El Oro']
         store_types = ['A', 'B', 'C', 'D']
-        families = ['AUTOMOTIVE', 'BABY CARE', 'BEAUTY', 'BEVERAGES', 'BOOKS', 'BREAD/BAKERY', 'CLEANING', 'DAIRY'] # Example families
+        families = ['AUTOMOTIVE', 'BABY CARE', 'BEAUTY', 'BEVERAGES', 'BOOKS', 'BREAD/BAKERY', 'CLEANING', 'DAIRY']
         
-        # Generate enough data for a meaningful mock
         mock_data = []
         record_id = 0
         for day in dates:
-            for store_nbr in range(1, 6): # 5 example stores
+            dcoilwtico = round(np.random.uniform(30, 100), 2)
+            for store_nbr in range(1, 6):
                 state = np.random.choice(states)
                 
-                # Assign cities based on state
                 if state == 'Pichincha':
                     city = np.random.choice(['Quito', 'Rumiñahui'])
                 elif state == 'Guayas':
@@ -42,12 +46,11 @@ def load_data():
                     city = np.random.choice(['City X', 'City Y'])
                 
                 store_type = np.random.choice(store_types)
-                cluster = np.random.randint(1, 18) # Example clusters 1-17
+                cluster = np.random.randint(1, 18)
                 
                 for family in families:
-                    sales = np.random.randint(0, 500) if np.random.rand() > 0.1 else 0 # Simulate some zero sales
+                    sales = np.random.randint(0, 500) if np.random.rand() > 0.1 else 0
                     onpromotion = np.random.randint(0, 50) if sales > 0 else 0
-                    dcoilwtico = round(np.random.uniform(30, 100), 2)
                     day_type = np.random.choice(['Holiday', 'Work Day', 'Weekend'])
 
                     mock_data.append([
@@ -61,36 +64,48 @@ def load_data():
             'city', 'state', 'store_type', 'cluster', 'dcoilwtico', 'day_type'
         ])
     
-    # --- Data Preprocessing Steps ---
     train["date"] = pd.to_datetime(train["date"], errors="coerce")
-    train = train.dropna(subset=['date']) # Drop rows where date is NaT
+    train = train.dropna(subset=['date'])
     train = train.set_index("date")
-    train.index = pd.to_datetime(train.index) # Ensure index is datetime
+    train.index = pd.to_datetime(train.index)
 
     min_date = train.index.min().date()
     max_date = train.index.max().date()
     
-    # Calculate total sales by state for sorting dropdown, ensure it exists
-    if 'state' in train.columns and 'sales' in train.columns:
-        sort_state = train.groupby('state')['sales'].sum().sort_values(ascending=False)
+    sort_state = train.groupby('state')['sales'].sum().sort_values(ascending=False) if 'state' in train.columns and 'sales' in train.columns else pd.Series([], dtype='float64')
+
+    prophet_df = train.groupby(train.index)['sales'].sum().reset_index()
+    prophet_df.columns = ['ds', 'y']
+    prophet_df['ds'] = pd.to_datetime(prophet_df['ds'])
+
+    return train, min_date, max_date, sort_state, prophet_df
+
+
+
+@st.cache_resource
+def load_prophet_model(path):
+    if os.path.exists(path):
+        try:
+            with open(path, 'rb') as f:
+                model = pickle.load(f)
+            st.success("Prophet model loaded successfully.")
+            return model
+        except Exception as e:
+            st.error(f"Error loading Prophet model: {e}")
+            return None
     else:
-        sort_state = pd.Series([], dtype='float64') # Empty series if columns are missing
+        st.error(f"Model file not found at: {path}")
+        return None
 
-    return train, min_date, max_date, sort_state
 
-def run_dashboard():
+def run_dashboard(train, min_date, max_date, sort_state):
     """
-    Main function to run the Streamlit application dashboard.
+    Main function to run the Streamlit application dashboard (Original Code).
     """
-    train, min_date, max_date, sort_state = load_data()
-
-    st.set_page_config(layout="wide", page_title="City Sales Dashboard", page_icon="📊")
     st.title("City Sales Dashboard")
 
-    # Display the data summary with unique counts
     st.subheader("Data Summary (Unique Values)")
     
-    # Metrics
     col1, col2, col3, col4 = st.columns(4)
     
     total_records = train.shape[0]
@@ -112,74 +127,52 @@ def run_dashboard():
     col6.metric("Unique Store Types", unique_store_types)
     col7.metric("Unique Clusters", unique_clusters)
 
-    # Expander for detailed unique lists
     with st.expander("View Unique Lists for Categories"):
-        if 'state' in train.columns:
-            st.write("**Unique States:**")
-            st.code(', '.join(sorted(train['state'].unique().astype(str))))
-        if 'city' in train.columns:
-            st.write("**Unique Cities:**")
-            st.code(', '.join(sorted(train['city'].unique().astype(str))))
-        if 'store_nbr' in train.columns:
-            st.write("**Unique Store Numbers:**")
-            st.code(', '.join(sorted(train['store_nbr'].unique().astype(str))))
-        if 'family' in train.columns:
-            st.write("**Unique Families:**")
-            st.code(', '.join(sorted(train['family'].unique().astype(str))))
-        if 'store_type' in train.columns:
-            st.write("**Unique Store Types:**")
-            st.code(', '.join(sorted(train['store_type'].unique().astype(str))))
-        if 'cluster' in train.columns:
-            st.write("**Unique Clusters:**")
-            st.code(', '.join(sorted(train['cluster'].unique().astype(str))))
-        if 'day_type' in train.columns:
-            st.write("**Unique Day Types:**")
-            st.code(', '.join(sorted(train['day_type'].unique().astype(str))))
+        for col in ['state', 'city', 'store_nbr', 'family', 'store_type', 'cluster', 'day_type']:
+            if col in train.columns:
+                st.write(f"**Unique {col.capitalize()}s:**")
+                st.code(', '.join(sorted(train[col].unique().astype(str))))
         
     st.markdown("---")
 
-    # --- Sidebar Controls ---
-    with st.sidebar:
-        st.header("Dashboard Controls")
+    st.subheader("Dashboard Controls")
 
-        col_chosen = st.multiselect(
-            "Choose State",
-            options=sort_state.index.tolist(),
-            default=['Pichincha'] if 'Pichincha' in sort_state.index else (sort_state.index.tolist()[:1] if not sort_state.empty else []),
-            key='state_id',
-            placeholder="Select one or more states"
-        )
+    col_chosen = st.multiselect(
+        "Choose State",
+        options=sort_state.index.tolist(),
+        default=['Pichincha'] if 'Pichincha' in sort_state.index else (sort_state.index.tolist()[:1] if not sort_state.empty else []),
+        key='state_id_dash',
+        placeholder="Select one or more states"
+    )
 
-        agg_method = st.radio(
-            "Aggregate Method",
-            options=['sum', 'mean'],
-            index=0,  
-            horizontal=True,
-            key='value_id'
-        )
+    agg_method = st.radio(
+        "Aggregate Method",
+        options=['sum', 'mean'],
+        index=0,  
+        horizontal=True,
+        key='value_id_dash'
+    )
 
-        st.markdown("---")
-        st.subheader("Date Range Selection")
+    st.markdown("---")
+    st.subheader("Date Range Selection")
 
-        date_range = st.date_input(
-            "Select Date Range",
-            value=[min_date, max_date],
-            min_value=min_date,
-            max_value=max_date,
-            key='date_id'
-        )
+    date_range = st.date_input(
+        "Select Date Range",
+        value=[min_date, max_date],
+        min_value=min_date,
+        max_value=max_date,
+        key='date_id_dash'
+    )
 
-        if len(date_range) == 2:
-            start_date, end_date = date_range[0], date_range[1]
-        elif len(date_range) == 1:
-            start_date, end_date = date_range[0], date_range[0]
-        else:
-            start_date, end_date = min_date, max_date
+    if len(date_range) == 2:
+        start_date, end_date = date_range[0], date_range[1]
+    elif len(date_range) == 1:
+        start_date, end_date = date_range[0], date_range[0]
+    else:
+        start_date, end_date = min_date, max_date
 
-        st.caption(f"Selected range: **{start_date.strftime('%d-%m-%Y')}** → **{end_date.strftime('%d-%m-%Y')}**")
+    st.caption(f"Selected range: **{start_date.strftime('%d-%m-%Y')}** → **{end_date.strftime('%d-%m-%Y')}**")
 
-    # --- Graph Logic ---
-    # Ensure 'sales' column exists before trying to filter or aggregate
     if 'sales' not in train.columns:
         st.error("The 'sales' column is missing from the data. Cannot generate sales-related charts.")
         return
@@ -217,17 +210,10 @@ def run_dashboard():
                 color_discrete_sequence=["#1abc9c"]
             )
 
-            fig.update_traces(
-                textposition='outside',
-                hovertemplate="<b>City:</b> %{x}<br>" +
-                              "<b>Sales:</b> %{y:,.2f}<br>" +
-                              "<extra></extra>"
-            )
+            fig.update_traces(textposition='outside')
             fig.update_yaxes(tickformat=".2s", title_font=dict(size=14))
             fig.update_xaxes(title_font=dict(size=14))
-            fig.update_layout(
-                title_font_size=20,
-            )
+            fig.update_layout(title_font_size=20)
 
         st.plotly_chart(fig, use_container_width=True)
 
@@ -235,5 +221,117 @@ def run_dashboard():
         st.error(f"An error occurred while processing data: {str(e)}")
 
 
+
+def run_forecast_app(model, prophet_df):
+    """
+    Runs the Prophet forecasting interface.
+    """
+    st.title("📈 Time Series Forecasting (Prophet)")
+    
+    if model is None or prophet_df.empty:
+        st.error("Prophet model or historical data is missing. Cannot run forecast.")
+        return
+
+    st.sidebar.header("Forecast Settings")
+    
+    last_train_date = prophet_df['ds'].max()
+    min_date_for_forecast = last_train_date + timedelta(days=1)
+    
+    st.sidebar.info(f"Last historical date: **{last_train_date.strftime('%Y-%m-%d')}**")
+
+    forecast_end_date = st.sidebar.date_input(
+        "Select Forecast End Date:",
+        value=min_date_for_forecast + timedelta(days=30),
+        min_value=min_date_for_forecast.date(),
+        max_value=min_date_for_forecast.date() + timedelta(days=365),
+        key='date_id_forecast'
+    )
+
+    if forecast_end_date >= min_date_for_forecast.date():
+        periods = (pd.to_datetime(forecast_end_date) - last_train_date).days
+        st.sidebar.success(f"Forecasting **{periods}** days.")
+    else:
+        periods = 0
+        st.sidebar.warning("Please select an end date after the last training date.")
+        
+    if st.sidebar.button("🚀 Run Forecast", key='forecast_button'):
+        if periods > 0:
+            st.header("Forecast Results")
+            
+            with st.spinner('Generating forecast...'):
+                future = model.make_future_dataframe(periods=periods)
+                forecast = model.predict(future)
+                
+                forecast_future = forecast[forecast['ds'] > last_train_date].copy()
+
+            st.subheader("Forecast Table (Future Days)")
+            st.dataframe(
+                forecast_future[['ds', 'yhat', 'yhat_lower', 'yhat_upper']].rename(
+                    columns={'ds': 'Date', 'yhat': 'Forecast Value', 'yhat_lower': 'Lower Bound', 'yhat_upper': 'Upper Bound'}
+                ).set_index('Date'),
+                use_container_width=True
+            )
+
+            st.subheader("Forecast Visualization")
+
+            fig = go.Figure()
+
+            fig.add_trace(go.Scatter(
+                x=prophet_df['ds'],
+                y=prophet_df['y'],
+                mode='markers',
+                name='Historical Data (Actual)',
+                marker=dict(color='black', size=4)
+            ))
+            
+            fig.add_trace(go.Scatter(
+                x=forecast['ds'],
+                y=forecast['yhat'],
+                mode='lines',
+                name='Forecast (Predicted)',
+                line=dict(color='#1abc9c', width=2)
+            ))
+            
+            fig.add_trace(go.Scatter(
+                x=pd.concat([forecast['ds'], forecast['ds'].iloc[::-1]]),
+                y=pd.concat([forecast['yhat_upper'], forecast['yhat_lower'].iloc[::-1]]),
+                fill='toself',
+                fillcolor='rgba(27, 188, 156, 0.2)',
+                line=dict(color='rgba(255,255,255,0)'),
+                hoverinfo="skip",
+                name='80% Confidence Interval'
+            ))
+
+            fig.update_layout(
+                title='Historical Data and Future Forecast',
+                xaxis_title='Date',
+                yaxis_title='Value',
+                title_font_size=20
+            )
+            
+            st.plotly_chart(fig, use_container_width=True)
+
+            st.subheader("Model Components")
+            fig_components = model.plot_components(forecast)
+            st.write(fig_components)
+            
+        else:
+            st.error("Please select a valid forecast period.")
+
+
+
+
 if __name__ == '__main__':
-    run_dashboard()
+    train, min_date, max_date, sort_state, prophet_df = load_data()
+    model = load_prophet_model(MODEL_PATH)
+    
+    st.sidebar.title("App Navigation")
+    app_mode = st.sidebar.selectbox(
+        "Choose App Mode",
+        ["City Sales Dashboard", "Time Series Forecast"]
+    )
+
+    if app_mode == "City Sales Dashboard":
+        run_dashboard(train, min_date, max_date, sort_state)
+    elif app_mode == "Time Series Forecast":
+        run_forecast_app(model, prophet_df)
