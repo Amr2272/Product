@@ -145,8 +145,8 @@ def run_dashboard(train, min_date, max_date, sort_state):
     date_range = st.date_input(
         "Select Date Range",
         value=[min_date, max_date],
-        min_value=min_date,
-        max_value=max_date,
+        min_value=date(2000, 1, 1), 
+        max_value=date(2100, 1, 1), 
         key='date_id_dash'
     )
 
@@ -224,26 +224,24 @@ def run_forecast_app(model, prophet_df):
     st.sidebar.header("Forecast Settings")
     
     last_train_date = prophet_df['ds'].max()
-    min_date_for_forecast = last_train_date + timedelta(days=1)
     
     st.sidebar.info(f"Last historical date: **{last_train_date.strftime('%Y-%m-%d')}**")
 
-    min_date_val = min_date_for_forecast.date()
-
     forecast_end_date = st.sidebar.date_input(
         "Select Forecast End Date:",
-        value=min_date_val + timedelta(days=30),
-        min_value=min_date_val,
-        max_value=min_date_val + timedelta(days=365*2), 
+        value=last_train_date.date() + timedelta(days=30),
+        min_value=date(2000, 1, 1), 
+        max_value=date(2100, 1, 1), 
         key='date_id_forecast'
     )
+    
 
-    if forecast_end_date >= min_date_val:
-        periods = (pd.to_datetime(forecast_end_date) - last_train_date).days
+    periods = (pd.to_datetime(forecast_end_date) - last_train_date).days
+    
+    if periods > 0:
         st.sidebar.success(f"Forecasting **{periods}** days.")
     else:
-        periods = 0
-        st.sidebar.warning("Please select an end date after the last training date.")
+        st.sidebar.info(f"The selected end date is in the past or current date. Prophet will show historical fit.")
         
     
     if st.sidebar.button("🚀 Run Forecast", key='forecast_button'):
@@ -262,7 +260,7 @@ def run_forecast_app(model, prophet_df):
 
             st.success("Forecast generated successfully!")
         else:
-            st.error("Please select a valid forecast period.")
+            st.error("Forecast end date must be after the last training date to run a prediction.")
 
 
     if st.session_state.forecast_data is not None:
@@ -288,7 +286,6 @@ def run_forecast_app(model, prophet_df):
 
         fig = go.Figure()
 
-        
         fig.add_trace(go.Scatter(
             x=prophet_df['ds'],
             y=prophet_df['y'],
@@ -296,7 +293,6 @@ def run_forecast_app(model, prophet_df):
             name='Historical Data (Actual)',
             marker=dict(color='blue', size=4)
         ))
-        
         
         fig.add_trace(go.Scatter(
             x=forecast_data['ds'],
@@ -306,7 +302,6 @@ def run_forecast_app(model, prophet_df):
             line=dict(color='#1abc9c', width=2)
         ))
 
-        
         fig.add_trace(go.Scatter(
             x=pd.concat([forecast_data['ds'], forecast_data['ds'].iloc[::-1]]),
             y=pd.concat([forecast_data['yhat_upper'], forecast_data['yhat_lower'].iloc[::-1]]),
@@ -330,8 +325,8 @@ def run_forecast_app(model, prophet_df):
         fig_components = model_fit.plot_components(forecast_data)
         st.write(fig_components)
         
-    elif periods > 0:
-        st.info("Click the '🚀 Run Forecast' button to generate the prediction.")
+    else:
+        pass
 
 
 if __name__ == '__main__':
