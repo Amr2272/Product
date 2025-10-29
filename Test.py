@@ -88,6 +88,18 @@ def load_prophet_model(path):
 
 
 def run_dashboard(train, min_date, max_date, sort_state):
+    st.title("🛍️ Store Sales Forecasting Project")
+    st.markdown("""
+        ### 🧾 Project Overview
+        This project aims to forecast store sales using historical data.
+        Throughout the process, several data issues were identified and resolved to improve model performance.
+        
+        ### ⚙️ Data Cleaning & Preprocessing
+        - **Handled Missing Values:** Filled or removed missing entries to maintain data consistency.  
+        - **Removed Duplicates:** Ensured no duplicate records exist in the dataset.  
+        - **Corrected Holiday Data:** Removed or adjusted incorrect duplicate holiday entries.
+        """)
+    
     st.title("City Sales Dashboard")
 
     st.subheader("Data Summary (Unique Values)")
@@ -345,3 +357,4 @@ if __name__ == '__main__':
         run_dashboard(train, min_date, max_date, sort_state)
     elif app_mode == "Time Series Forecast":
         run_forecast_app(model, prophet_df)
+
