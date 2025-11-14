@@ -221,6 +221,43 @@ def run_dashboard(train, min_date, max_date, sort_state):
         st.error(f"An error occurred while processing data: {str(e)}")
 
 
+def check_model_performance(prophet_df, forecast_data, mae_percent_threshold=0.35):
+    """
+    Calculates MAE on historical data fit and checks against a percentage threshold
+    of the mean actual sales (y).
+    
+    :param prophet_df: DataFrame with historical 'ds' and 'y' (actual values).
+    :param forecast_data: DataFrame with 'ds' and 'yhat' (predicted values) from Prophet.
+    :param mae_percent_threshold: The MAE percentage of mean(y) above which an alert is triggered (e.g., 0.35 for 35%).
+    :return: MAE value, the calculated MAE threshold value, and alert status.
+    """
+    # Merge actuals (y) with predictions (yhat) for historical period
+    performance_df = prophet_df.merge(
+        forecast_data[['ds', 'yhat']], 
+        on='ds', 
+        how='inner'
+    )
+    
+    # Calculate Mean Absolute Error (MAE)
+    if not performance_df.empty:
+        performance_df['abs_error'] = abs(performance_df['y'] - performance_df['yhat'])
+        mae = performance_df['abs_error'].mean()
+        
+        # Calculate the threshold based on the mean of actual sales (y)
+        mean_y = performance_df['y'].mean()
+        threshold_value = mean_y * mae_percent_threshold
+        
+        # Determine alert status
+        if mae > threshold_value:
+            alert_status = "ALERT: High MAE"
+        else:
+            alert_status = "Performance OK"
+            
+        return mae, threshold_value, alert_status
+    
+    return None, None, "Error: Historical data missing or merge failed."
+
+
 def run_forecast_app(model, prophet_df):
     st.title("📈 Time Series Forecasting (Prophet)")
     
@@ -228,6 +265,11 @@ def run_forecast_app(model, prophet_df):
         st.session_state.forecast_data = None
         st.session_state.forecast_future_data = None
         st.session_state.model_fit = None
+        # Initialize new performance states
+        st.session_state.mae = None
+        st.session_state.mae_threshold_value = None
+        st.session_state.alert_status = None
+        st.session_state.mae_percent_threshold = None
 
     if model is None or prophet_df.empty:
         st.error("Prophet model or historical data is missing. Cannot run forecast.")
@@ -259,7 +301,7 @@ def run_forecast_app(model, prophet_df):
     if st.sidebar.button("🚀 Run Forecast", key='forecast_button'):
         if periods > 0:
             
-            with st.spinner('Generating forecast...'):
+            with st.spinner('Generating forecast and checking performance...'):
                 future = model.make_future_dataframe(periods=periods)
                 forecast = model.predict(future)
                 
@@ -269,8 +311,19 @@ def run_forecast_app(model, prophet_df):
                 st.session_state.forecast_data = forecast
                 st.session_state.forecast_future_data = forecast_future
                 st.session_state.model_fit = model 
+                
+                # --- New Performance Check and Logging (Updated for 35% comparison) ---
+                # Set the percentage threshold (0.35 = 35%)
+                MAE_PERCENT_THRESHOLD = 0.35
+                mae_result, threshold_value, alert_status = check_model_performance(prophet_df, forecast, MAE_PERCENT_THRESHOLD)
+                
+                st.session_state.mae = mae_result
+                st.session_state.mae_threshold_value = threshold_value
+                st.session_state.alert_status = alert_status
+                st.session_state.mae_percent_threshold = MAE_PERCENT_THRESHOLD
+                # --- End New Block ---
 
-            st.success("Forecast generated successfully!")
+            st.success("Forecast generated and performance checked successfully!")
         else:
             st.error("Forecast end date must be after the last training date to run a prediction.")
 
@@ -280,6 +333,33 @@ def run_forecast_app(model, prophet_df):
         forecast_data = st.session_state.forecast_data
         forecast_future = st.session_state.forecast_future_data
         model_fit = st.session_state.model_fit
+        
+        # --- New Performance Log and Alert Display (Updated for percentage display) ---
+        if 'mae' in st.session_state and st.session_state.mae is not None:
+            st.markdown("---")
+            st.subheader("Model Performance & Alert System 🔔")
+
+            mae_val = st.session_state.mae
+            alert_status = st.session_state.alert_status
+            threshold_value = st.session_state.mae_threshold_value
+            percent_threshold = st.session_state.mae_percent_threshold * 100 # Convert to percentage for display
+            
+            # Display Alert
+            if "ALERT" in alert_status:
+                st.error(f"**🚨 {alert_status}**\n\n**Action Required:** Prediction accuracy has dropped below the defined threshold. Stakeholders should be notified. \n\n*Threshold: < {percent_threshold:.0f}% of Mean Sales (Calculated Value: {threshold_value:,.2f} MAE)*")
+            else:
+                st.info(f"**✅ {alert_status}**\n\nPrediction accuracy is within the acceptable threshold.")
+            
+            # Display Performance Log
+            st.markdown(f"""
+            > **Performance Log**
+            > 
+            > * **Metric Used:** Mean Absolute Error (MAE) on historical fit.
+            > * **Calculated MAE:** **{mae_val:,.2f}**
+            > * **Defined Threshold:** **{percent_threshold:.0f}% of Mean Sales (Actual Value: {threshold_value:,.2f} MAE)**
+            > * **Run Date:** {pd.Timestamp('now').strftime('%Y-%m-%d %H:%M:%S')}
+            """)
+        # --- End New Block ---
         
         st.header("Forecast Results")
         
@@ -353,8 +433,12 @@ if __name__ == '__main__':
 
     if app_mode == "City Sales Dashboard":
         if 'forecast_data' in st.session_state:
+            # Clear forecast state when switching modes
             st.session_state.forecast_data = None
+            st.session_state.mae = None
+            st.session_state.alert_status = None
+            st.session_state.mae_threshold_value = None
+            st.session_state.mae_percent_threshold = None
         run_dashboard(train, min_date, max_date, sort_state)
     elif app_mode == "Time Series Forecast":
         run_forecast_app(model, prophet_df)
-
