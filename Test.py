@@ -313,8 +313,8 @@ def run_forecast_app(model, prophet_df):
                 st.session_state.model_fit = model 
                 
                 # --- New Performance Check and Logging (Updated for 35% comparison) ---
-                # Set the percentage threshold (0.35 = 35%)
-                MAE_PERCENT_THRESHOLD = 0.35
+                # Set the percentage threshold (0.25 = 25%)
+                MAE_PERCENT_THRESHOLD = 0.25
                 mae_result, threshold_value, alert_status = check_model_performance(prophet_df, forecast, MAE_PERCENT_THRESHOLD)
                 
                 st.session_state.mae = mae_result
@@ -442,4 +442,5 @@ if __name__ == '__main__':
         run_dashboard(train, min_date, max_date, sort_state)
     elif app_mode == "Time Series Forecast":
         run_forecast_app(model, prophet_df)
+
 
