@@ -221,7 +221,7 @@ def run_dashboard(train, min_date, max_date, sort_state):
         st.error(f"An error occurred while processing data: {str(e)}")
 
 
-def check_model_performance(prophet_df, forecast_data, mae_percent_threshold=0.35):
+def check_model_performance(prophet_df, forecast_data, mae_percent_threshold=0.25):
     """
     Calculates MAE on historical data fit and checks against a percentage threshold
     of the mean actual sales (y).
@@ -442,3 +442,4 @@ if __name__ == '__main__':
         run_dashboard(train, min_date, max_date, sort_state)
     elif app_mode == "Time Series Forecast":
         run_forecast_app(model, prophet_df)
+
