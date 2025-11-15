@@ -697,4 +697,5 @@ def run_forecast_app(model, prophet_df):
         fig.add_trace(go.Scatter(
             x=forecast_data['ds'],
             y=forecast_data['yhat'],
-            mode='lines
+            mode='lines')
+
