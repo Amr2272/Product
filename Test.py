@@ -344,16 +344,21 @@ def run_dashboard(train, min_date, max_date, sort_state):
 def run_forecast_app(model, prophet_df):
     st.title("📈 Time Series Forecasting (Prophet)")
     
-    # Initialize session state
+    # Initialize ALL session state variables first
     if 'forecast_data' not in st.session_state:
         st.session_state.forecast_data = None
+    if 'forecast_future_data' not in st.session_state:
         st.session_state.forecast_future_data = None
+    if 'model_fit' not in st.session_state:
         st.session_state.model_fit = None
+    if 'mae' not in st.session_state:
         st.session_state.mae = None
+    if 'mae_threshold_value' not in st.session_state:
         st.session_state.mae_threshold_value = None
+    if 'alert_status' not in st.session_state:
         st.session_state.alert_status = None
+    if 'mae_percent_threshold' not in st.session_state:
         st.session_state.mae_percent_threshold = None
-    
     if 'real_time_predictions' not in st.session_state:
         st.session_state.real_time_predictions = []
 
