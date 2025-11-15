@@ -4,12 +4,28 @@ import numpy as np
 import plotly.express as px
 import pickle
 from prophet import Prophet
-from datetime import date, timedelta
+from datetime import date, timedelta, datetime
 import os
 import plotly.graph_objects as go
+from typing import Dict, List, Optional
+import json
 
 st.set_page_config(layout="wide", page_title="Data Analysis & Forecast App", page_icon="📊")
 MODEL_PATH = 'prophet.pkl'
+
+# ============================================================================
+# PREDICTION MODE CONFIGURATION
+# ============================================================================
+
+class PredictionMode:
+    """Configuration for different prediction modes"""
+    BATCH = "batch"
+    REAL_TIME = "real_time"
+    SCHEDULED = "scheduled"
+
+# ============================================================================
+# DATA LOADING
+# ============================================================================
 
 @st.cache_data
 def load_data():
@@ -86,11 +102,144 @@ def load_prophet_model(path):
     else:
         return None
 
+# ============================================================================
+# BATCH PREDICTION FUNCTIONS
+# ============================================================================
+
+def batch_predict(model, periods: int, include_history: bool = True) -> pd.DataFrame:
+    """
+    Generate batch predictions for multiple future periods
+    
+    Args:
+        model: Trained Prophet model
+        periods: Number of days to forecast
+        include_history: Whether to include historical fitted values
+    
+    Returns:
+        DataFrame with predictions
+    """
+    future = model.make_future_dataframe(periods=periods)
+    forecast = model.predict(future)
+    
+    if not include_history:
+        # Filter to only future dates
+        last_train_date = model.history['ds'].max()
+        forecast = forecast[forecast['ds'] > last_train_date]
+    
+    return forecast
+
+# ============================================================================
+# REAL-TIME PREDICTION FUNCTIONS
+# ============================================================================
+
+def real_time_predict(model, target_date: datetime, 
+                      context_data: Optional[Dict] = None) -> Dict:
+    """
+    Generate real-time prediction for a specific date with optional context
+    
+    Args:
+        model: Trained Prophet model
+        target_date: Specific date to predict
+        context_data: Optional dictionary with additional context (promotions, holidays, etc.)
+    
+    Returns:
+        Dictionary with prediction results
+    """
+    # Create a future dataframe for the single target date
+    future_df = pd.DataFrame({'ds': [pd.to_datetime(target_date)]})
+    
+    # Add regressor values if context data provided
+    if context_data:
+        for key, value in context_data.items():
+            if key in model.extra_regressors:
+                future_df[key] = value
+    
+    # Generate prediction
+    forecast = model.predict(future_df)
+    
+    # Extract key metrics
+    result = {
+        'date': target_date,
+        'prediction': float(forecast['yhat'].iloc[0]),
+        'lower_bound': float(forecast['yhat_lower'].iloc[0]),
+        'upper_bound': float(forecast['yhat_upper'].iloc[0]),
+        'trend': float(forecast['trend'].iloc[0]),
+        'timestamp': datetime.now().isoformat(),
+        'context': context_data or {}
+    }
+    
+    return result
+
+
+def streaming_predict(model, date_list: List[datetime], 
+                     batch_size: int = 10) -> List[Dict]:
+    """
+    Simulate streaming predictions for multiple dates
+    
+    Args:
+        model: Trained Prophet model
+        date_list: List of dates to predict
+        batch_size: Number of predictions to process at once
+    
+    Returns:
+        List of prediction dictionaries
+    """
+    results = []
+    
+    for i in range(0, len(date_list), batch_size):
+        batch = date_list[i:i + batch_size]
+        future_df = pd.DataFrame({'ds': batch})
+        forecast = model.predict(future_df)
+        
+        for idx, row in forecast.iterrows():
+            results.append({
+                'date': row['ds'],
+                'prediction': float(row['yhat']),
+                'lower_bound': float(row['yhat_lower']),
+                'upper_bound': float(row['yhat_upper']),
+                'batch_id': i // batch_size
+            })
+    
+    return results
+
+# ============================================================================
+# PERFORMANCE MONITORING
+# ============================================================================
+
+def check_model_performance(prophet_df, forecast_data, mae_percent_threshold=0.25):
+    """
+    Calculates MAE on historical data fit and checks against a percentage threshold
+    """
+    performance_df = prophet_df.merge(
+        forecast_data[['ds', 'yhat']], 
+        on='ds', 
+        how='inner'
+    )
+    
+    if not performance_df.empty:
+        performance_df['abs_error'] = abs(performance_df['y'] - performance_df['yhat'])
+        mae = performance_df['abs_error'].mean()
+        
+        mean_y = performance_df['y'].mean()
+        threshold_value = mean_y * mae_percent_threshold
+        
+        if mae > threshold_value:
+            alert_status = "ALERT: High MAE"
+        else:
+            alert_status = "Performance OK"
+            
+        return mae, threshold_value, alert_status
+    
+    return None, None, "Error: Historical data missing or merge failed."
+
+# ============================================================================
+# DASHBOARD FUNCTION
+# ============================================================================
 
 def run_dashboard(train, min_date, max_date, sort_state):
-    st.title("🛍️ Store Sales Forecasting Project")
+    st.title("🛒️ Store Sales Forecasting Project")
     st.markdown("""
-        ### 🧾 Project Overview
+        ### 📋 Project Overview
         This project aims to forecast store sales using historical data.
         Throughout the process, several data issues were identified and resolved to improve model performance.
         
@@ -220,206 +369,338 @@ def run_dashboard(train, min_date, max_date, sort_state):
     except Exception as e:
         st.error(f"An error occurred while processing data: {str(e)}")
 
-
-def check_model_performance(prophet_df, forecast_data, mae_percent_threshold=0.25):
-    """
-    Calculates MAE on historical data fit and checks against a percentage threshold
-    of the mean actual sales (y).
-    
-    :param prophet_df: DataFrame with historical 'ds' and 'y' (actual values).
-    :param forecast_data: DataFrame with 'ds' and 'yhat' (predicted values) from Prophet.
-    :param mae_percent_threshold: The MAE percentage of mean(y) above which an alert is triggered (e.g., 0.35 for 35%).
-    :return: MAE value, the calculated MAE threshold value, and alert status.
-    """
-    # Merge actuals (y) with predictions (yhat) for historical period
-    performance_df = prophet_df.merge(
-        forecast_data[['ds', 'yhat']], 
-        on='ds', 
-        how='inner'
-    )
-    
-    # Calculate Mean Absolute Error (MAE)
-    if not performance_df.empty:
-        performance_df['abs_error'] = abs(performance_df['y'] - performance_df['yhat'])
-        mae = performance_df['abs_error'].mean()
-        
-        # Calculate the threshold based on the mean of actual sales (y)
-        mean_y = performance_df['y'].mean()
-        threshold_value = mean_y * mae_percent_threshold
-        
-        # Determine alert status
-        if mae > threshold_value:
-            alert_status = "ALERT: High MAE"
-        else:
-            alert_status = "Performance OK"
-            
-        return mae, threshold_value, alert_status
-    
-    return None, None, "Error: Historical data missing or merge failed."
-
+# ============================================================================
+# ENHANCED FORECAST APP WITH BATCH & REAL-TIME MODES
+# ============================================================================
 
 def run_forecast_app(model, prophet_df):
     st.title("📈 Time Series Forecasting (Prophet)")
     
+    # Initialize session state
     if 'forecast_data' not in st.session_state:
         st.session_state.forecast_data = None
         st.session_state.forecast_future_data = None
         st.session_state.model_fit = None
-        # Initialize new performance states
         st.session_state.mae = None
         st.session_state.mae_threshold_value = None
         st.session_state.alert_status = None
         st.session_state.mae_percent_threshold = None
+        st.session_state.real_time_predictions = []
 
     if model is None or prophet_df.empty:
         st.error("Prophet model or historical data is missing. Cannot run forecast.")
         return
 
-    st.sidebar.header("Forecast Settings")
+    # ========================================================================
+    # PREDICTION MODE SELECTOR
+    # ========================================================================
     
-    last_train_date = prophet_df['ds'].max()
+    st.sidebar.header("🎯 Prediction Mode")
     
-    st.sidebar.info(f"Last historical date: **{last_train_date.strftime('%Y-%m-%d')}**")
-
-    forecast_end_date = st.sidebar.date_input(
-        "Select Forecast End Date:",
-        value=last_train_date.date() + timedelta(days=30),
-        min_value=date(2000, 1, 1), 
-        max_value=date(2100, 1, 1), 
-        key='date_id_forecast'
+    prediction_mode = st.sidebar.radio(
+        "Select Prediction Type",
+        options=["📦 Batch Predictions", "⚡ Real-Time Predictions", "📊 Streaming Simulation"],
+        key='prediction_mode'
     )
     
-
-    periods = (pd.to_datetime(forecast_end_date) - last_train_date).days
+    st.sidebar.markdown("---")
     
-    if periods > 0:
-        st.sidebar.success(f"Forecasting **{periods}** days.")
-    else:
-        st.sidebar.info(f"The selected end date is in the past or current date. Prophet will show historical fit.")
-        
+    # ========================================================================
+    # MODE 1: BATCH PREDICTIONS
+    # ========================================================================
     
-    if st.sidebar.button("🚀 Run Forecast", key='forecast_button'):
-        if periods > 0:
-            
-            with st.spinner('Generating forecast and checking performance...'):
-                future = model.make_future_dataframe(periods=periods)
-                forecast = model.predict(future)
-                
-                last_train_date_only = last_train_date.date()
-                forecast_future = forecast[forecast['ds'].dt.date > last_train_date_only].copy()
-                
-                st.session_state.forecast_data = forecast
-                st.session_state.forecast_future_data = forecast_future
-                st.session_state.model_fit = model 
-                
-                # --- New Performance Check and Logging (Updated for 35% comparison) ---
-                # Set the percentage threshold (0.25 = 25%)
-                MAE_PERCENT_THRESHOLD = 0.25
-                mae_result, threshold_value, alert_status = check_model_performance(prophet_df, forecast, MAE_PERCENT_THRESHOLD)
-                
-                st.session_state.mae = mae_result
-                st.session_state.mae_threshold_value = threshold_value
-                st.session_state.alert_status = alert_status
-                st.session_state.mae_percent_threshold = MAE_PERCENT_THRESHOLD
-                # --- End New Block ---
-
-            st.success("Forecast generated and performance checked successfully!")
-        else:
-            st.error("Forecast end date must be after the last training date to run a prediction.")
-
-
-    if st.session_state.forecast_data is not None:
+    if prediction_mode == "📦 Batch Predictions":
+        st.header("📦 Batch Prediction Mode")
+        st.info("Generate forecasts for multiple days at once. Ideal for planning and reporting.")
         
-        forecast_data = st.session_state.forecast_data
-        forecast_future = st.session_state.forecast_future_data
-        model_fit = st.session_state.model_fit
+        st.sidebar.header("Batch Forecast Settings")
         
-        # --- New Performance Log and Alert Display (Updated for percentage display) ---
-        if 'mae' in st.session_state and st.session_state.mae is not None:
-            st.markdown("---")
-            st.subheader("Model Performance & Alert System 🔔")
+        last_train_date = prophet_df['ds'].max()
+        st.sidebar.info(f"Last historical date: **{last_train_date.strftime('%Y-%m-%d')}**")
 
-            mae_val = st.session_state.mae
-            alert_status = st.session_state.alert_status
-            threshold_value = st.session_state.mae_threshold_value
-            percent_threshold = st.session_state.mae_percent_threshold * 100 # Convert to percentage for display
-            
-            # Display Alert
-            if "ALERT" in alert_status:
-                st.error(f"**🚨 {alert_status}**\n\n**Action Required:** Prediction accuracy has dropped below the defined threshold. Stakeholders should be notified. \n\n*Threshold: < {percent_threshold:.0f}% of Mean Sales (Calculated Value: {threshold_value:,.2f} MAE)*")
-            else:
-                st.info(f"**✅ {alert_status}**\n\nPrediction accuracy is within the acceptable threshold.")
-            
-            # Display Performance Log
-            st.markdown(f"""
-            > **Performance Log**
-            > 
-            > * **Metric Used:** Mean Absolute Error (MAE) on historical fit.
-            > * **Calculated MAE:** **{mae_val:,.2f}**
-            > * **Defined Threshold:** **{percent_threshold:.0f}% of Mean Sales (Actual Value: {threshold_value:,.2f} MAE)**
-            > * **Run Date:** {pd.Timestamp('now').strftime('%Y-%m-%d %H:%M:%S')}
-            """)
-        # --- End New Block ---
-        
-        st.header("Forecast Results")
-        
-        st.subheader("Forecast Table (Future Days)")
-        if not forecast_future.empty:
-            st.dataframe(
-                forecast_future[['ds', 'yhat', 'yhat_lower', 'yhat_upper']].rename(
-                    columns={'ds': 'Date', 'yhat': 'Forecast Value', 'yhat_lower': 'Lower Bound', 'yhat_upper': 'Upper Bound'}
-                ).set_index('Date').style.format({'Forecast Value': "{:,.0f}", 'Lower Bound': "{:,.0f}", 'Upper Bound': "{:,.0f}"}),
-                use_container_width=True
-            )
-        else:
-            st.warning("No future dates found in the forecast data. Check the selected end date.")
-
-        st.subheader("Forecast Visualization")
-
-        fig = go.Figure()
-
-        fig.add_trace(go.Scatter(
-            x=prophet_df['ds'],
-            y=prophet_df['y'],
-            mode='markers',
-            name='Historical Data (Actual)',
-            marker=dict(color='blue', size=4)
-        ))
-        
-        fig.add_trace(go.Scatter(
-            x=forecast_data['ds'],
-            y=forecast_data['yhat'],
-            mode='lines',
-            name='Forecast (Predicted)',
-            line=dict(color='#1abc9c', width=2)
-        ))
-
-        fig.add_trace(go.Scatter(
-            x=pd.concat([forecast_data['ds'], forecast_data['ds'].iloc[::-1]]),
-            y=pd.concat([forecast_data['yhat_upper'], forecast_data['yhat_lower'].iloc[::-1]]),
-            fill='toself',
-            fillcolor='rgba(27, 188, 156, 0.2)',
-            line=dict(color='rgba(255,255,255,0)'),
-            hoverinfo="skip",
-            name='80% Confidence Interval'
-        ))
-
-        fig.update_layout(
-            title='Historical Data and Future Forecast',
-            xaxis_title='Date',
-            yaxis_title='Value',
-            title_font_size=20
+        forecast_end_date = st.sidebar.date_input(
+            "Select Forecast End Date:",
+            value=last_train_date.date() + timedelta(days=30),
+            min_value=date(2000, 1, 1), 
+            max_value=date(2100, 1, 1), 
+            key='date_id_forecast'
         )
         
-        st.plotly_chart(fig, use_container_width=True)
-
-        st.subheader("Model Components")
-        fig_components = model_fit.plot_components(forecast_data)
-        st.write(fig_components)
+        periods = (pd.to_datetime(forecast_end_date) - last_train_date).days
         
-    else:
-        pass
+        if periods > 0:
+            st.sidebar.success(f"Forecasting **{periods}** days.")
+        else:
+            st.sidebar.warning("Selected date is not in the future.")
+        
+        if st.sidebar.button("🚀 Run Batch Forecast", key='batch_forecast_button'):
+            if periods > 0:
+                with st.spinner('Generating batch forecast...'):
+                    forecast = batch_predict(model, periods, include_history=True)
+                    
+                    last_train_date_only = last_train_date.date()
+                    forecast_future = forecast[forecast['ds'].dt.date > last_train_date_only].copy()
+                    
+                    st.session_state.forecast_data = forecast
+                    st.session_state.forecast_future_data = forecast_future
+                    st.session_state.model_fit = model
+                    
+                    # Performance check
+                    MAE_PERCENT_THRESHOLD = 0.25
+                    mae_result, threshold_value, alert_status = check_model_performance(
+                        prophet_df, forecast, MAE_PERCENT_THRESHOLD
+                    )
+                    
+                    st.session_state.mae = mae_result
+                    st.session_state.mae_threshold_value = threshold_value
+                    st.session_state.alert_status = alert_status
+                    st.session_state.mae_percent_threshold = MAE_PERCENT_THRESHOLD
 
+                st.success(f"✅ Batch forecast generated for {periods} days!")
+            else:
+                st.error("Forecast end date must be after the last training date.")
+        
+        # Display batch results
+        if st.session_state.forecast_data is not None:
+            display_forecast_results(
+                st.session_state.forecast_data,
+                st.session_state.forecast_future_data,
+                st.session_state.model_fit,
+                prophet_df
+            )
+    
+    # ========================================================================
+    # MODE 2: REAL-TIME PREDICTIONS
+    # ========================================================================
+    
+    elif prediction_mode == "⚡ Real-Time Predictions":
+        st.header("⚡ Real-Time Prediction Mode")
+        st.info("Generate instant predictions for specific dates. Ideal for API integration and on-demand forecasting.")
+        
+        col1, col2 = st.columns([2, 1])
+        
+        with col1:
+            target_date = st.date_input(
+                "Select Target Date for Prediction:",
+                value=datetime.now().date() + timedelta(days=1),
+                min_value=date(2000, 1, 1),
+                max_value=date(2100, 1, 1),
+                key='real_time_date'
+            )
+        
+        with col2:
+            st.markdown("###")
+            if st.button("🎯 Predict Now", key='real_time_button', type="primary"):
+                with st.spinner('Generating real-time prediction...'):
+                    result = real_time_predict(model, pd.to_datetime(target_date))
+                    
+                    # Store in session state
+                    st.session_state.real_time_predictions.insert(0, result)
+                    if len(st.session_state.real_time_predictions) > 10:
+                        st.session_state.real_time_predictions.pop()
+                
+                st.success("✅ Prediction complete!")
+        
+        # Display real-time result
+        if st.session_state.real_time_predictions:
+            latest = st.session_state.real_time_predictions[0]
+            
+            st.markdown("### 📊 Latest Prediction")
+            
+            col1, col2, col3, col4 = st.columns(4)
+            
+            with col1:
+                st.metric("Date", latest['date'].strftime('%Y-%m-%d'))
+            with col2:
+                st.metric("Prediction", f"{latest['prediction']:,.0f}")
+            with col3:
+                st.metric("Lower Bound", f"{latest['lower_bound']:,.0f}")
+            with col4:
+                st.metric("Upper Bound", f"{latest['upper_bound']:,.0f}")
+            
+            # Show JSON response (API simulation)
+            with st.expander("🔍 View API Response (JSON)"):
+                st.json(latest)
+            
+            # History of predictions
+            if len(st.session_state.real_time_predictions) > 1:
+                st.markdown("### 📜 Prediction History")
+                history_df = pd.DataFrame(st.session_state.real_time_predictions)
+                history_df['date'] = pd.to_datetime(history_df['date']).dt.strftime('%Y-%m-%d')
+                st.dataframe(
+                    history_df[['date', 'prediction', 'lower_bound', 'upper_bound']],
+                    use_container_width=True
+                )
+    
+    # ========================================================================
+    # MODE 3: STREAMING SIMULATION
+    # ========================================================================
+    
+    elif prediction_mode == "📊 Streaming Simulation":
+        st.header("📊 Streaming Prediction Simulation")
+        st.info("Simulate processing multiple predictions in batches. Useful for high-throughput scenarios.")
+        
+        st.sidebar.header("Streaming Settings")
+        
+        num_dates = st.sidebar.slider("Number of dates to predict", 10, 100, 30)
+        batch_size = st.sidebar.slider("Batch size", 5, 50, 10)
+        
+        if st.sidebar.button("🌊 Start Streaming", key='streaming_button'):
+            with st.spinner('Processing streaming predictions...'):
+                # Generate date list
+                start_date = prophet_df['ds'].max() + timedelta(days=1)
+                date_list = [start_date + timedelta(days=i) for i in range(num_dates)]
+                
+                # Run streaming predictions
+                results = streaming_predict(model, date_list, batch_size=batch_size)
+                
+                st.session_state.streaming_results = results
+            
+            st.success(f"✅ Processed {num_dates} predictions in {len(set(r['batch_id'] for r in results))} batches!")
+        
+        # Display streaming results
+        if 'streaming_results' in st.session_state and st.session_state.streaming_results:
+            results = st.session_state.streaming_results
+            
+            # Convert to DataFrame
+            results_df = pd.DataFrame(results)
+            results_df['date'] = pd.to_datetime(results_df['date'])
+            
+            # Summary metrics
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("Total Predictions", len(results))
+            with col2:
+                st.metric("Batches Processed", results_df['batch_id'].nunique())
+            with col3:
+                st.metric("Avg Prediction", f"{results_df['prediction'].mean():,.0f}")
+            
+            # Visualization
+            fig = px.line(
+                results_df, 
+                x='date', 
+                y='prediction',
+                title='Streaming Predictions Over Time',
+                labels={'date': 'Date', 'prediction': 'Predicted Sales'}
+            )
+            
+            fig.add_scatter(
+                x=results_df['date'],
+                y=results_df['lower_bound'],
+                mode='lines',
+                name='Lower Bound',
+                line=dict(dash='dash', color='lightgray')
+            )
+            
+            fig.add_scatter(
+                x=results_df['date'],
+                y=results_df['upper_bound'],
+                mode='lines',
+                name='Upper Bound',
+                line=dict(dash='dash', color='lightgray')
+            )
+            
+            st.plotly_chart(fig, use_container_width=True)
+            
+            # Data table
+            with st.expander("📋 View All Predictions"):
+                st.dataframe(
+                    results_df[['date', 'prediction', 'lower_bound', 'upper_bound', 'batch_id']],
+                    use_container_width=True
+                )
+
+
+def display_forecast_results(forecast_data, forecast_future, model_fit, prophet_df):
+    """Display forecast results with performance metrics"""
+    
+    # Performance metrics
+    if 'mae' in st.session_state and st.session_state.mae is not None:
+        st.markdown("---")
+        st.subheader("Model Performance & Alert System 🔔")
+
+        mae_val = st.session_state.mae
+        alert_status = st.session_state.alert_status
+        threshold_value = st.session_state.mae_threshold_value
+        percent_threshold = st.session_state.mae_percent_threshold * 100
+        
+        if "ALERT" in alert_status:
+            st.error(f"**🚨 {alert_status}**\n\n**Action Required:** Prediction accuracy has dropped below the defined threshold.\n\n*Threshold: < {percent_threshold:.0f}% of Mean Sales (Calculated Value: {threshold_value:,.2f} MAE)*")
+        else:
+            st.info(f"**✅ {alert_status}**\n\nPrediction accuracy is within the acceptable threshold.")
+        
+        st.markdown(f"""
+        > **Performance Log**
+        > 
+        > * **Metric Used:** Mean Absolute Error (MAE) on historical fit.
+        > * **Calculated MAE:** **{mae_val:,.2f}**
+        > * **Defined Threshold:** **{percent_threshold:.0f}% of Mean Sales (Actual Value: {threshold_value:,.2f} MAE)**
+        > * **Run Date:** {pd.Timestamp('now').strftime('%Y-%m-%d %H:%M:%S')}
+        """)
+    
+    st.markdown("---")
+    st.header("Forecast Results")
+    
+    # Forecast table
+    st.subheader("Forecast Table (Future Days)")
+    if not forecast_future.empty:
+        st.dataframe(
+            forecast_future[['ds', 'yhat', 'yhat_lower', 'yhat_upper']].rename(
+                columns={'ds': 'Date', 'yhat': 'Forecast Value', 'yhat_lower': 'Lower Bound', 'yhat_upper': 'Upper Bound'}
+            ).set_index('Date').style.format({'Forecast Value': "{:,.0f}", 'Lower Bound': "{:,.0f}", 'Upper Bound': "{:,.0f}"}),
+            use_container_width=True
+        )
+    else:
+        st.warning("No future dates found in the forecast data.")
+
+    # Visualization
+    st.subheader("Forecast Visualization")
+    
+    fig = go.Figure()
+
+    fig.add_trace(go.Scatter(
+        x=prophet_df['ds'],
+        y=prophet_df['y'],
+        mode='markers',
+        name='Historical Data (Actual)',
+        marker=dict(color='blue', size=4)
+    ))
+    
+    fig.add_trace(go.Scatter(
+        x=forecast_data['ds'],
+        y=forecast_data['yhat'],
+        mode='lines',
+        name='Forecast (Predicted)',
+        line=dict(color='#1abc9c', width=2)
+    ))
+
+    fig.add_trace(go.Scatter(
+        x=pd.concat([forecast_data['ds'], forecast_data['ds'].iloc[::-1]]),
+        y=pd.concat([forecast_data['yhat_upper'], forecast_data['yhat_lower'].iloc[::-1]]),
+        fill='toself',
+        fillcolor='rgba(27, 188, 156, 0.2)',
+        line=dict(color='rgba(255,255,255,0)'),
+        hoverinfo="skip",
+        name='80% Confidence Interval'
+    ))
+
+    fig.update_layout(
+        title='Historical Data and Future Forecast',
+        xaxis_title='Date',
+        yaxis_title='Value',
+        title_font_size=20
+    )
+    
+    st.plotly_chart(fig, use_container_width=True)
+
+    # Components
+    st.subheader("Model Components")
+    fig_components = model_fit.plot_components(forecast_data)
+    st.write(fig_components)
+
+
+# ============================================================================
+# MAIN APPLICATION
+# ============================================================================
 
 if __name__ == '__main__':
     train, min_date, max_date, sort_state, prophet_df = load_data()
@@ -433,14 +714,9 @@ if __name__ == '__main__':
 
     if app_mode == "City Sales Dashboard":
         if 'forecast_data' in st.session_state:
-            # Clear forecast state when switching modes
             st.session_state.forecast_data = None
             st.session_state.mae = None
             st.session_state.alert_status = None
-            st.session_state.mae_threshold_value = None
-            st.session_state.mae_percent_threshold = None
         run_dashboard(train, min_date, max_date, sort_state)
     elif app_mode == "Time Series Forecast":
         run_forecast_app(model, prophet_df)
-
-
