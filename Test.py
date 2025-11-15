@@ -332,7 +332,7 @@ def run_dashboard(train, min_date, max_date, sort_state):
             fig.update_xaxes(title_font=dict(size=14))
             fig.update_layout(title_font_size=20)
 
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width='stretch')
 
     except Exception as e:
         st.error(f"An error occurred while processing data: {str(e)}")
@@ -343,24 +343,6 @@ def run_dashboard(train, min_date, max_date, sort_state):
 
 def run_forecast_app(model, prophet_df):
     st.title("📈 Time Series Forecasting (Prophet)")
-    
-    # Initialize ALL session state variables first
-    if 'forecast_data' not in st.session_state:
-        st.session_state.forecast_data = None
-    if 'forecast_future_data' not in st.session_state:
-        st.session_state.forecast_future_data = None
-    if 'model_fit' not in st.session_state:
-        st.session_state.model_fit = None
-    if 'mae' not in st.session_state:
-        st.session_state.mae = None
-    if 'mae_threshold_value' not in st.session_state:
-        st.session_state.mae_threshold_value = None
-    if 'alert_status' not in st.session_state:
-        st.session_state.alert_status = None
-    if 'mae_percent_threshold' not in st.session_state:
-        st.session_state.mae_percent_threshold = None
-    if 'real_time_predictions' not in st.session_state:
-        st.session_state.real_time_predictions = []
 
     if model is None or prophet_df.empty:
         st.error("Prophet model or historical data is missing. Cannot run forecast.")
@@ -504,7 +486,7 @@ def run_forecast_app(model, prophet_df):
                 history_df['date'] = pd.to_datetime(history_df['date']).dt.strftime('%Y-%m-%d')
                 st.dataframe(
                     history_df[['date', 'prediction', 'lower_bound', 'upper_bound']],
-                    use_container_width=True
+                    width='stretch'
                 )
 
 
@@ -545,7 +527,7 @@ def display_forecast_results(forecast_data, forecast_future, model_fit, prophet_
             forecast_future[['ds', 'yhat', 'yhat_lower', 'yhat_upper']].rename(
                 columns={'ds': 'Date', 'yhat': 'Forecast Value', 'yhat_lower': 'Lower Bound', 'yhat_upper': 'Upper Bound'}
             ).set_index('Date').style.format({'Forecast Value': "{:,.0f}", 'Lower Bound': "{:,.0f}", 'Upper Bound': "{:,.0f}"}),
-            use_container_width=True
+            width='stretch'
         )
     else:
         st.warning("No future dates found in the forecast data.")
@@ -588,7 +570,7 @@ def display_forecast_results(forecast_data, forecast_future, model_fit, prophet_
         title_font_size=20
     )
     
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width='stretch')
 
     # Components
     st.subheader("Model Components")
@@ -601,6 +583,24 @@ def display_forecast_results(forecast_data, forecast_future, model_fit, prophet_
 # ============================================================================
 
 if __name__ == '__main__':
+    # Initialize ALL session state at the very beginning
+    if 'forecast_data' not in st.session_state:
+        st.session_state.forecast_data = None
+    if 'forecast_future_data' not in st.session_state:
+        st.session_state.forecast_future_data = None
+    if 'model_fit' not in st.session_state:
+        st.session_state.model_fit = None
+    if 'mae' not in st.session_state:
+        st.session_state.mae = None
+    if 'mae_threshold_value' not in st.session_state:
+        st.session_state.mae_threshold_value = None
+    if 'alert_status' not in st.session_state:
+        st.session_state.alert_status = None
+    if 'mae_percent_threshold' not in st.session_state:
+        st.session_state.mae_percent_threshold = None
+    if 'real_time_predictions' not in st.session_state:
+        st.session_state.real_time_predictions = []
+    
     train, min_date, max_date, sort_state, prophet_df = load_data()
     model = load_prophet_model(MODEL_PATH)
     
@@ -611,7 +611,7 @@ if __name__ == '__main__':
     )
 
     if app_mode == "City Sales Dashboard":
-        if 'forecast_data' in st.session_state:
+        if st.session_state.forecast_data is not None:
             st.session_state.forecast_data = None
             st.session_state.mae = None
             st.session_state.alert_status = None
