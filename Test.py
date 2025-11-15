@@ -252,7 +252,7 @@ def check_model_performance(prophet_df, forecast_data, mae_percent_threshold=0.2
 
 def train_prophet_model(df, seasonality_mode='multiplicative'):
     """Train a Prophet model on the given data"""
-    model = Prophet(seasonality_mode=seasonality_mode)
+    model = Prophet(seasonality_mode=seasonality_mode, daily_seasonality=False)
     model.fit(df)
     return model
 
@@ -361,13 +361,15 @@ def export_batch_results_to_excel(batch_results, batch_by):
             summary_df = pd.DataFrame(summary_data)
             summary_df.to_excel(writer, sheet_name='Summary', index=False)
         
-        # Individual forecast sheets
+        # Individual forecast sheets (limit to first 20 to avoid too many sheets)
+        sheet_count = 0
         for item, result in batch_results.items():
-            if 'error' not in result and 'forecast' in result:
+            if 'error' not in result and 'forecast' in result and sheet_count < 20:
                 sheet_name = str(item)[:31]  # Excel sheet name limit
                 forecast_df = result['forecast'][['ds', 'yhat', 'yhat_lower', 'yhat_upper']].copy()
                 forecast_df.columns = ['Date', 'Forecast', 'Lower Bound', 'Upper Bound']
                 forecast_df.to_excel(writer, sheet_name=sheet_name, index=False)
+                sheet_count += 1
     
     output.seek(0)
     return output
@@ -401,7 +403,7 @@ def run_batch_forecast_app(train):
     
     # Get available items
     if batch_by in train.columns:
-        available_items = sorted(train[batch_by].unique())
+        available_items = sorted(train[batch_by].unique().astype(str))
         
         # Option to select specific items or all
         select_all = st.sidebar.checkbox("Forecast All Items", value=True)
@@ -568,7 +570,8 @@ def run_batch_forecast_app(train):
                     title=f'Forecast for {batch_by.capitalize()}: {selected_item}',
                     xaxis_title='Date',
                     yaxis_title='Sales',
-                    title_font_size=18
+                    title_font_size=18,
+                    hovermode='x unified'
                 )
                 
                 st.plotly_chart(fig, use_container_width=True)
@@ -694,47 +697,4 @@ def run_forecast_app(model, prophet_df):
         fig.add_trace(go.Scatter(
             x=forecast_data['ds'],
             y=forecast_data['yhat'],
-            mode='lines',
-            name='Forecast (Predicted)',
-     line=dict(color='#1abc9c', width=2)
-        ))
-
-        # Confidence interval
-        fig.add_trace(go.Scatter(
-            x=pd.concat([forecast_data['ds'], forecast_data['ds'].iloc[::-1]]),
-            y=pd.concat([forecast_data['yhat_upper'], forecast_data['yhat_lower'].iloc[::-1]]),
-            fill='toself',
-            fillcolor='rgba(27, 188, 156, 0.2)',
-            line=dict(color='rgba(255,255,255,0)'),
-            name='Confidence Interval'
-        ))
-
-        fig.update_layout(
-            title="Forecast vs Actual Sales",
-            xaxis_title="Date",
-            yaxis_title="Sales",
-            title_font_size=18
-        )
-
-        st.plotly_chart(fig, use_container_width=True)
-
-
-# --- Main App Navigation ---
-
-        train, min_date, max_date, sort_state, prophet_df = load_data()
-        model = load_prophet_model(MODEL_PATH)
-        
-        if model is None:
-            model = train_prophet_model(prophet_df)
-            with open(MODEL_PATH, 'wb') as f:
-                pickle.dump(model, f)
-        
-        st.sidebar.title("App Navigation")
-        mode = st.sidebar.selectbox("Choose Mode", ["Dashboard", "Forecast", "Batch Forecast"])
-        
-        if mode == "Dashboard":
-            run_dashboard(train, min_date, max_date, sort_state)
-        elif mode == "Forecast":
-            run_forecast_app(model, prophet_df)
-        elif mode == "Batch Forecast":
-            run_batch_forecast_app(train)
+            mode='lines
