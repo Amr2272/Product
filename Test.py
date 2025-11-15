@@ -1,31 +1,3 @@
-AMR
-a…
-Invisible
-This is the start of the الحيكي ميكي channel. 
-hafez_walid — 7:28 PM
-CI = x̄ ± z_(α/2) × (σ/√n)
-Khaled Ehab — 7:42 PM
-A researcher wishes to estimate the number of days it takes an automobile
-dealer to sell a Chevrolet Aveo. A random sample of 50 cars had a mean
-time on the dealer’s lot of 54 days. Assume the population standard
-deviation to be 6.0 days. Find the best point estimate of the population
-mean and the %95 confidence interval of the population mean. (Hint: For
-the %95 confidence interval use z = 1.96)
-iiL0Rd
-
- — 7:53 PM
-cccabbaca
-AMR — 8:57 PM
-import streamlit as st
-import pandas as pd
-import numpy as np
-import plotly.express as px
-import pickle
-from prophet import Prophet
-Expand
-message.txt
-25 KB
-﻿
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -646,3 +618,4 @@ if __name__ == '__main__':
         run_dashboard(train, min_date, max_date, sort_state)
     elif app_mode == "Time Series Forecast":
         run_forecast_app(model, prophet_df)
+
