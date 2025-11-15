@@ -7,7 +7,6 @@ from prophet import Prophet
 from datetime import date, timedelta
 import os
 import plotly.graph_objects as go
-from io import BytesIO
 
 st.set_page_config(layout="wide", page_title="Data Analysis & Forecast App", page_icon="📊")
 MODEL_PATH = 'prophet.pkl'
@@ -226,20 +225,29 @@ def check_model_performance(prophet_df, forecast_data, mae_percent_threshold=0.2
     """
     Calculates MAE on historical data fit and checks against a percentage threshold
     of the mean actual sales (y).
+    
+    :param prophet_df: DataFrame with historical 'ds' and 'y' (actual values).
+    :param forecast_data: DataFrame with 'ds' and 'yhat' (predicted values) from Prophet.
+    :param mae_percent_threshold: The MAE percentage of mean(y) above which an alert is triggered (e.g., 0.35 for 35%).
+    :return: MAE value, the calculated MAE threshold value, and alert status.
     """
+    # Merge actuals (y) with predictions (yhat) for historical period
     performance_df = prophet_df.merge(
         forecast_data[['ds', 'yhat']], 
         on='ds', 
         how='inner'
     )
     
+    # Calculate Mean Absolute Error (MAE)
     if not performance_df.empty:
         performance_df['abs_error'] = abs(performance_df['y'] - performance_df['yhat'])
         mae = performance_df['abs_error'].mean()
         
+        # Calculate the threshold based on the mean of actual sales (y)
         mean_y = performance_df['y'].mean()
         threshold_value = mean_y * mae_percent_threshold
         
+        # Determine alert status
         if mae > threshold_value:
             alert_status = "ALERT: High MAE"
         else:
@@ -250,335 +258,6 @@ def check_model_performance(prophet_df, forecast_data, mae_percent_threshold=0.2
     return None, None, "Error: Historical data missing or merge failed."
 
 
-def train_prophet_model(df, seasonality_mode='multiplicative'):
-    """Train a Prophet model on the given data"""
-    model = Prophet(seasonality_mode=seasonality_mode, daily_seasonality=False)
-    model.fit(df)
-    return model
-
-
-def generate_batch_forecasts(train, forecast_end_date, batch_by='family', selected_items=None):
-    """
-    Generate batch forecasts for multiple segments
-    
-    Parameters:
-    - train: Full training dataset
-    - forecast_end_date: End date for forecasting
-    - batch_by: Column to batch by ('family', 'store_nbr', 'state', 'store_type')
-    - selected_items: List of items to forecast (if None, forecast all)
-    
-    Returns:
-    - Dictionary of forecasts and performance metrics
-    """
-    results = {}
-    
-    if batch_by not in train.columns:
-        return None
-    
-    # Get unique items to forecast
-    items = selected_items if selected_items else train[batch_by].unique()
-    
-    progress_bar = st.progress(0)
-    status_text = st.empty()
-    
-    for idx, item in enumerate(items):
-        status_text.text(f"Processing {batch_by}: {item} ({idx+1}/{len(items)})")
-        
-        # Filter data for this item
-        item_data = train[train[batch_by] == item].copy()
-        
-        # Prepare Prophet dataframe
-        prophet_df = item_data.groupby(item_data.index)['sales'].sum().reset_index()
-        prophet_df.columns = ['ds', 'y']
-        prophet_df['ds'] = pd.to_datetime(prophet_df['ds'])
-        
-        # Skip if insufficient data
-        if len(prophet_df) < 30:
-            results[item] = {'error': 'Insufficient data (< 30 days)'}
-            continue
-        
-        try:
-            # Train model
-            model = train_prophet_model(prophet_df)
-            
-            # Generate forecast
-            last_train_date = prophet_df['ds'].max()
-            periods = (pd.to_datetime(forecast_end_date) - last_train_date).days
-            
-            if periods > 0:
-                future = model.make_future_dataframe(periods=periods)
-                forecast = model.predict(future)
-                
-                # Get future forecast only
-                forecast_future = forecast[forecast['ds'].dt.date > last_train_date.date()].copy()
-                
-                # Check performance
-                mae, threshold, alert = check_model_performance(prophet_df, forecast)
-                
-                results[item] = {
-                    'forecast': forecast_future,
-                    'full_forecast': forecast,
-                    'historical': prophet_df,
-                    'model': model,
-                    'mae': mae,
-                    'threshold': threshold,
-                    'alert': alert,
-                    'total_forecast': forecast_future['yhat'].sum()
-                }
-            else:
-                results[item] = {'error': 'Forecast date must be after last training date'}
-                
-        except Exception as e:
-            results[item] = {'error': str(e)}
-        
-        progress_bar.progress((idx + 1) / len(items))
-    
-    status_text.text("Batch processing complete!")
-    progress_bar.empty()
-    status_text.empty()
-    
-    return results
-
-
-def export_batch_results_to_excel(batch_results, batch_by):
-    """Export batch forecast results to Excel file"""
-    output = BytesIO()
-    
-    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-        # Summary sheet
-        summary_data = []
-        for item, result in batch_results.items():
-            if 'error' not in result:
-                summary_data.append({
-                    batch_by: item,
-                    'Total Forecast': result['total_forecast'],
-                    'MAE': result['mae'],
-                    'MAE Threshold': result['threshold'],
-                    'Alert Status': result['alert']
-                })
-        
-        if summary_data:
-            summary_df = pd.DataFrame(summary_data)
-            summary_df.to_excel(writer, sheet_name='Summary', index=False)
-        
-        # Individual forecast sheets (limit to first 20 to avoid too many sheets)
-        sheet_count = 0
-        for item, result in batch_results.items():
-            if 'error' not in result and 'forecast' in result and sheet_count < 20:
-                sheet_name = str(item)[:31]  # Excel sheet name limit
-                forecast_df = result['forecast'][['ds', 'yhat', 'yhat_lower', 'yhat_upper']].copy()
-                forecast_df.columns = ['Date', 'Forecast', 'Lower Bound', 'Upper Bound']
-                forecast_df.to_excel(writer, sheet_name=sheet_name, index=False)
-                sheet_count += 1
-    
-    output.seek(0)
-    return output
-
-
-def run_batch_forecast_app(train):
-    """New batch forecasting interface"""
-    st.title("📦 Batch Forecasting by Business Segments")
-    
-    st.markdown("""
-    Generate forecasts for multiple business segments simultaneously. This is useful for:
-    - **Product Family Planning**: Forecast all product families to plan inventory
-    - **Store-level Forecasting**: Generate forecasts for all stores for resource allocation
-    - **Regional Analysis**: Forecast by state or city for regional planning
-    - **Store Type Analysis**: Compare performance across different store types
-    """)
-    
-    # Initialize session state
-    if 'batch_results' not in st.session_state:
-        st.session_state.batch_results = None
-        st.session_state.batch_by = None
-    
-    st.sidebar.header("⚙️ Batch Forecast Settings")
-    
-    # Select dimension to batch by
-    batch_by = st.sidebar.selectbox(
-        "Batch Forecast By:",
-        options=['family', 'store_nbr', 'state', 'store_type', 'city'],
-        help="Select the dimension to generate individual forecasts for"
-    )
-    
-    # Get available items
-    if batch_by in train.columns:
-        available_items = sorted(train[batch_by].unique().astype(str))
-        
-        # Option to select specific items or all
-        select_all = st.sidebar.checkbox("Forecast All Items", value=True)
-        
-        if not select_all:
-            selected_items = st.sidebar.multiselect(
-                f"Select {batch_by.capitalize()}:",
-                options=available_items,
-                default=available_items[:3] if len(available_items) >= 3 else available_items
-            )
-        else:
-            selected_items = available_items
-            st.sidebar.info(f"Will forecast {len(selected_items)} items")
-    else:
-        st.error(f"Column '{batch_by}' not found in data")
-        return
-    
-    # Date selection
-    last_date = train.index.max().date()
-    forecast_end_date = st.sidebar.date_input(
-        "Forecast End Date:",
-        value=last_date + timedelta(days=30),
-        min_value=last_date,
-        max_value=date(2100, 1, 1)
-    )
-    
-    periods = (pd.to_datetime(forecast_end_date) - pd.to_datetime(last_date)).days
-    st.sidebar.success(f"Forecasting **{periods}** days ahead")
-    
-    # Run batch forecast
-    if st.sidebar.button("🚀 Run Batch Forecast", type="primary"):
-        if not selected_items:
-            st.warning("Please select at least one item to forecast")
-            return
-        
-        with st.spinner(f'Generating forecasts for {len(selected_items)} items...'):
-            batch_results = generate_batch_forecasts(
-                train, 
-                forecast_end_date, 
-                batch_by, 
-                selected_items
-            )
-            st.session_state.batch_results = batch_results
-            st.session_state.batch_by = batch_by
-        
-        st.success(f"✅ Batch forecast completed for {len(batch_results)} items!")
-    
-    # Display results
-    if st.session_state.batch_results:
-        batch_results = st.session_state.batch_results
-        batch_by = st.session_state.batch_by
-        
-        st.markdown("---")
-        st.header("📊 Batch Forecast Results")
-        
-        # Summary metrics
-        successful = sum(1 for r in batch_results.values() if 'error' not in r)
-        failed = len(batch_results) - successful
-        alerts = sum(1 for r in batch_results.values() if 'alert' in r and 'ALERT' in r['alert'])
-        
-        col1, col2, col3, col4 = st.columns(4)
-        col1.metric("Total Items", len(batch_results))
-        col2.metric("Successful", successful, delta=None)
-        col3.metric("Failed", failed, delta=None if failed == 0 else f"-{failed}", delta_color="inverse")
-        col4.metric("⚠️ Alerts", alerts, delta=None if alerts == 0 else f"-{alerts}", delta_color="inverse")
-        
-        # Summary table
-        st.subheader("Summary Table")
-        summary_data = []
-        for item, result in batch_results.items():
-            if 'error' in result:
-                summary_data.append({
-                    batch_by.capitalize(): item,
-                    'Status': '❌ Failed',
-                    'Error': result['error'],
-                    'Total Forecast': 0,
-                    'MAE': None,
-                    'Alert': 'N/A'
-                })
-            else:
-                summary_data.append({
-                    batch_by.capitalize(): item,
-                    'Status': '✅ Success',
-                    'Error': None,
-                    'Total Forecast': f"{result['total_forecast']:,.0f}",
-                    'MAE': f"{result['mae']:,.2f}" if result['mae'] else 'N/A',
-                    'Alert': '🚨' if 'ALERT' in result['alert'] else '✅'
-                })
-        
-        summary_df = pd.DataFrame(summary_data)
-        st.dataframe(summary_df, use_container_width=True, hide_index=True)
-        
-        # Export to Excel
-        st.subheader("📥 Export Results")
-        excel_data = export_batch_results_to_excel(batch_results, batch_by)
-        st.download_button(
-            label="Download Excel Report",
-            data=excel_data,
-            file_name=f"batch_forecast_{batch_by}_{pd.Timestamp('now').strftime('%Y%m%d')}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
-        
-        # Detailed view for individual items
-        st.markdown("---")
-        st.subheader("🔍 Detailed Forecast View")
-        
-        # Filter successful forecasts
-        successful_items = [item for item, r in batch_results.items() if 'error' not in r]
-        
-        if successful_items:
-            selected_item = st.selectbox(
-                f"Select {batch_by.capitalize()} to View:",
-                options=successful_items
-            )
-            
-            if selected_item:
-                result = batch_results[selected_item]
-                
-                # Alert status
-                if 'ALERT' in result['alert']:
-                    st.error(f"🚨 **{result['alert']}** - MAE: {result['mae']:,.2f} | Threshold: {result['threshold']:,.2f}")
-                else:
-                    st.info(f"✅ **{result['alert']}** - MAE: {result['mae']:,.2f} | Threshold: {result['threshold']:,.2f}")
-                
-                # Forecast table
-                with st.expander("📋 View Forecast Table", expanded=False):
-                    forecast_display = result['forecast'][['ds', 'yhat', 'yhat_lower', 'yhat_upper']].copy()
-                    forecast_display.columns = ['Date', 'Forecast', 'Lower Bound', 'Upper Bound']
-                    st.dataframe(forecast_display, use_container_width=True, hide_index=True)
-                
-                # Visualization
-                st.subheader("📈 Forecast Chart")
-                fig = go.Figure()
-                
-                # Historical data
-                fig.add_trace(go.Scatter(
-                    x=result['historical']['ds'],
-                    y=result['historical']['y'],
-                    mode='markers',
-                    name='Historical',
-                    marker=dict(color='blue', size=4)
-                ))
-                
-                # Forecast
-                fig.add_trace(go.Scatter(
-                    x=result['full_forecast']['ds'],
-                    y=result['full_forecast']['yhat'],
-                    mode='lines',
-                    name='Forecast',
-                    line=dict(color='#1abc9c', width=2)
-                ))
-                
-                # Confidence interval
-                fig.add_trace(go.Scatter(
-                    x=pd.concat([result['full_forecast']['ds'], result['full_forecast']['ds'].iloc[::-1]]),
-                    y=pd.concat([result['full_forecast']['yhat_upper'], result['full_forecast']['yhat_lower'].iloc[::-1]]),
-                    fill='toself',
-                    fillcolor='rgba(27, 188, 156, 0.2)',
-                    line=dict(color='rgba(255,255,255,0)'),
-                    name='Confidence Interval'
-                ))
-                
-                fig.update_layout(
-                    title=f'Forecast for {batch_by.capitalize()}: {selected_item}',
-                    xaxis_title='Date',
-                    yaxis_title='Sales',
-                    title_font_size=18,
-                    hovermode='x unified'
-                )
-                
-                st.plotly_chart(fig, use_container_width=True)
-        else:
-            st.warning("No successful forecasts to display")
-
-
 def run_forecast_app(model, prophet_df):
     st.title("📈 Time Series Forecasting (Prophet)")
     
@@ -586,6 +265,7 @@ def run_forecast_app(model, prophet_df):
         st.session_state.forecast_data = None
         st.session_state.forecast_future_data = None
         st.session_state.model_fit = None
+        # Initialize new performance states
         st.session_state.mae = None
         st.session_state.mae_threshold_value = None
         st.session_state.alert_status = None
@@ -609,6 +289,7 @@ def run_forecast_app(model, prophet_df):
         key='date_id_forecast'
     )
     
+
     periods = (pd.to_datetime(forecast_end_date) - last_train_date).days
     
     if periods > 0:
@@ -616,8 +297,10 @@ def run_forecast_app(model, prophet_df):
     else:
         st.sidebar.info(f"The selected end date is in the past or current date. Prophet will show historical fit.")
         
+    
     if st.sidebar.button("🚀 Run Forecast", key='forecast_button'):
         if periods > 0:
+            
             with st.spinner('Generating forecast and checking performance...'):
                 future = model.make_future_dataframe(periods=periods)
                 forecast = model.predict(future)
@@ -629,6 +312,8 @@ def run_forecast_app(model, prophet_df):
                 st.session_state.forecast_future_data = forecast_future
                 st.session_state.model_fit = model 
                 
+                # --- New Performance Check and Logging (Updated for 35% comparison) ---
+                # Set the percentage threshold (0.25 = 25%)
                 MAE_PERCENT_THRESHOLD = 0.25
                 mae_result, threshold_value, alert_status = check_model_performance(prophet_df, forecast, MAE_PERCENT_THRESHOLD)
                 
@@ -636,16 +321,20 @@ def run_forecast_app(model, prophet_df):
                 st.session_state.mae_threshold_value = threshold_value
                 st.session_state.alert_status = alert_status
                 st.session_state.mae_percent_threshold = MAE_PERCENT_THRESHOLD
+                # --- End New Block ---
 
             st.success("Forecast generated and performance checked successfully!")
         else:
             st.error("Forecast end date must be after the last training date to run a prediction.")
 
+
     if st.session_state.forecast_data is not None:
+        
         forecast_data = st.session_state.forecast_data
         forecast_future = st.session_state.forecast_future_data
         model_fit = st.session_state.model_fit
         
+        # --- New Performance Log and Alert Display (Updated for percentage display) ---
         if 'mae' in st.session_state and st.session_state.mae is not None:
             st.markdown("---")
             st.subheader("Model Performance & Alert System 🔔")
@@ -653,13 +342,15 @@ def run_forecast_app(model, prophet_df):
             mae_val = st.session_state.mae
             alert_status = st.session_state.alert_status
             threshold_value = st.session_state.mae_threshold_value
-            percent_threshold = st.session_state.mae_percent_threshold * 100
+            percent_threshold = st.session_state.mae_percent_threshold * 100 # Convert to percentage for display
             
+            # Display Alert
             if "ALERT" in alert_status:
                 st.error(f"**🚨 {alert_status}**\n\n**Action Required:** Prediction accuracy has dropped below the defined threshold. Stakeholders should be notified. \n\n*Threshold: < {percent_threshold:.0f}% of Mean Sales (Calculated Value: {threshold_value:,.2f} MAE)*")
             else:
                 st.info(f"**✅ {alert_status}**\n\nPrediction accuracy is within the acceptable threshold.")
             
+            # Display Performance Log
             st.markdown(f"""
             > **Performance Log**
             > 
@@ -668,6 +359,7 @@ def run_forecast_app(model, prophet_df):
             > * **Defined Threshold:** **{percent_threshold:.0f}% of Mean Sales (Actual Value: {threshold_value:,.2f} MAE)**
             > * **Run Date:** {pd.Timestamp('now').strftime('%Y-%m-%d %H:%M:%S')}
             """)
+        # --- End New Block ---
         
         st.header("Forecast Results")
         
@@ -697,5 +389,58 @@ def run_forecast_app(model, prophet_df):
         fig.add_trace(go.Scatter(
             x=forecast_data['ds'],
             y=forecast_data['yhat'],
-            mode='lines')
+            mode='lines',
+            name='Forecast (Predicted)',
+            line=dict(color='#1abc9c', width=2)
+        ))
+
+        fig.add_trace(go.Scatter(
+            x=pd.concat([forecast_data['ds'], forecast_data['ds'].iloc[::-1]]),
+            y=pd.concat([forecast_data['yhat_upper'], forecast_data['yhat_lower'].iloc[::-1]]),
+            fill='toself',
+            fillcolor='rgba(27, 188, 156, 0.2)',
+            line=dict(color='rgba(255,255,255,0)'),
+            hoverinfo="skip",
+            name='80% Confidence Interval'
+        ))
+
+        fig.update_layout(
+            title='Historical Data and Future Forecast',
+            xaxis_title='Date',
+            yaxis_title='Value',
+            title_font_size=20
+        )
+        
+        st.plotly_chart(fig, use_container_width=True)
+
+        st.subheader("Model Components")
+        fig_components = model_fit.plot_components(forecast_data)
+        st.write(fig_components)
+        
+    else:
+        pass
+
+
+if __name__ == '__main__':
+    train, min_date, max_date, sort_state, prophet_df = load_data()
+    model = load_prophet_model(MODEL_PATH)
+    
+    st.sidebar.title("App Navigation")
+    app_mode = st.sidebar.selectbox(
+        "Choose App Mode",
+        ["City Sales Dashboard", "Time Series Forecast"]
+    )
+
+    if app_mode == "City Sales Dashboard":
+        if 'forecast_data' in st.session_state:
+            # Clear forecast state when switching modes
+            st.session_state.forecast_data = None
+            st.session_state.mae = None
+            st.session_state.alert_status = None
+            st.session_state.mae_threshold_value = None
+            st.session_state.mae_percent_threshold = None
+        run_dashboard(train, min_date, max_date, sort_state)
+    elif app_mode == "Time Series Forecast":
+        run_forecast_app(model, prophet_df)
+
 
