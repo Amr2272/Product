@@ -170,38 +170,6 @@ def real_time_predict(model, target_date: datetime,
     
     return result
 
-
-def streaming_predict(model, date_list: List[datetime], 
-                     batch_size: int = 10) -> List[Dict]:
-    """
-    Simulate streaming predictions for multiple dates
-    
-    Args:
-        model: Trained Prophet model
-        date_list: List of dates to predict
-        batch_size: Number of predictions to process at once
-    
-    Returns:
-        List of prediction dictionaries
-    """
-    results = []
-    
-    for i in range(0, len(date_list), batch_size):
-        batch = date_list[i:i + batch_size]
-        future_df = pd.DataFrame({'ds': batch})
-        forecast = model.predict(future_df)
-        
-        for idx, row in forecast.iterrows():
-            results.append({
-                'date': row['ds'],
-                'prediction': float(row['yhat']),
-                'lower_bound': float(row['yhat_lower']),
-                'upper_bound': float(row['yhat_upper']),
-                'batch_id': i // batch_size
-            })
-    
-    return results
-
 # ============================================================================
 # PERFORMANCE MONITORING
 # ============================================================================
@@ -385,6 +353,8 @@ def run_forecast_app(model, prophet_df):
         st.session_state.mae_threshold_value = None
         st.session_state.alert_status = None
         st.session_state.mae_percent_threshold = None
+    
+    if 'real_time_predictions' not in st.session_state:
         st.session_state.real_time_predictions = []
 
     if model is None or prophet_df.empty:
@@ -399,7 +369,7 @@ def run_forecast_app(model, prophet_df):
     
     prediction_mode = st.sidebar.radio(
         "Select Prediction Type",
-        options=["📦 Batch Predictions", "⚡ Real-Time Predictions", "📊 Streaming Simulation"],
+        options=["📦 Batch Predictions", "⚡ Real-Time Predictions"],
         key='prediction_mode'
     )
     
@@ -529,83 +499,6 @@ def run_forecast_app(model, prophet_df):
                 history_df['date'] = pd.to_datetime(history_df['date']).dt.strftime('%Y-%m-%d')
                 st.dataframe(
                     history_df[['date', 'prediction', 'lower_bound', 'upper_bound']],
-                    use_container_width=True
-                )
-    
-    # ========================================================================
-    # MODE 3: STREAMING SIMULATION
-    # ========================================================================
-    
-    elif prediction_mode == "📊 Streaming Simulation":
-        st.header("📊 Streaming Prediction Simulation")
-        st.info("Simulate processing multiple predictions in batches. Useful for high-throughput scenarios.")
-        
-        st.sidebar.header("Streaming Settings")
-        
-        num_dates = st.sidebar.slider("Number of dates to predict", 10, 100, 30)
-        batch_size = st.sidebar.slider("Batch size", 5, 50, 10)
-        
-        if st.sidebar.button("🌊 Start Streaming", key='streaming_button'):
-            with st.spinner('Processing streaming predictions...'):
-                # Generate date list
-                start_date = prophet_df['ds'].max() + timedelta(days=1)
-                date_list = [start_date + timedelta(days=i) for i in range(num_dates)]
-                
-                # Run streaming predictions
-                results = streaming_predict(model, date_list, batch_size=batch_size)
-                
-                st.session_state.streaming_results = results
-            
-            st.success(f"✅ Processed {num_dates} predictions in {len(set(r['batch_id'] for r in results))} batches!")
-        
-        # Display streaming results
-        if 'streaming_results' in st.session_state and st.session_state.streaming_results:
-            results = st.session_state.streaming_results
-            
-            # Convert to DataFrame
-            results_df = pd.DataFrame(results)
-            results_df['date'] = pd.to_datetime(results_df['date'])
-            
-            # Summary metrics
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric("Total Predictions", len(results))
-            with col2:
-                st.metric("Batches Processed", results_df['batch_id'].nunique())
-            with col3:
-                st.metric("Avg Prediction", f"{results_df['prediction'].mean():,.0f}")
-            
-            # Visualization
-            fig = px.line(
-                results_df, 
-                x='date', 
-                y='prediction',
-                title='Streaming Predictions Over Time',
-                labels={'date': 'Date', 'prediction': 'Predicted Sales'}
-            )
-            
-            fig.add_scatter(
-                x=results_df['date'],
-                y=results_df['lower_bound'],
-                mode='lines',
-                name='Lower Bound',
-                line=dict(dash='dash', color='lightgray')
-            )
-            
-            fig.add_scatter(
-                x=results_df['date'],
-                y=results_df['upper_bound'],
-                mode='lines',
-                name='Upper Bound',
-                line=dict(dash='dash', color='lightgray')
-            )
-            
-            st.plotly_chart(fig, use_container_width=True)
-            
-            # Data table
-            with st.expander("📋 View All Predictions"):
-                st.dataframe(
-                    results_df[['date', 'prediction', 'lower_bound', 'upper_bound', 'batch_id']],
                     use_container_width=True
                 )
 
