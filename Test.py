@@ -32,46 +32,7 @@ def load_data():
     try:
         train = pd.read_csv('Data.zip')
     except FileNotFoundError:
-        dates = pd.date_range(start='2020-01-01', end='2022-12-31', freq='D')
-        
-        states = ['Pichincha', 'Guayas', 'Azuay', 'Manabi', 'El Oro']
-        store_types = ['A', 'B', 'C', 'D']
-        families = ['AUTOMOTIVE', 'BABY CARE', 'BEAUTY', 'BEVERAGES', 'BOOKS', 'BREAD/BAKERY', 'CLEANING', 'DAIRY']
-        
-        mock_data = []
-        record_id = 0
-        for day in dates:
-            dcoilwtico = round(np.random.uniform(30, 100), 2)
-            for store_nbr in range(1, 6):
-                state = np.random.choice(states)
-                
-                if state == 'Pichincha':
-                    city = np.random.choice(['Quito', 'Rumiñahui'])
-                elif state == 'Guayas':
-                    city = np.random.choice(['Guayaquil', 'Daule'])
-                elif state == 'Azuay':
-                    city = np.random.choice(['Cuenca'])
-                else:
-                    city = np.random.choice(['City X', 'City Y'])
-                
-                store_type = np.random.choice(store_types)
-                cluster = np.random.randint(1, 18)
-                
-                for family in families:
-                    sales = np.random.randint(0, 500) if np.random.rand() > 0.1 else 0
-                    onpromotion = np.random.randint(0, 50) if sales > 0 else 0
-                    day_type = np.random.choice(['Holiday', 'Work Day', 'Weekend'])
-
-                    mock_data.append([
-                        day, record_id, store_nbr, family, sales, onpromotion, 
-                        city, state, store_type, cluster, dcoilwtico, day_type
-                    ])
-                    record_id += 1
-
-        train = pd.DataFrame(mock_data, columns=[
-            'date', 'id', 'store_nbr', 'family', 'sales', 'onpromotion', 
-            'city', 'state', 'store_type', 'cluster', 'dcoilwtico', 'day_type'
-        ])
+       print('error')
     
     train["date"] = pd.to_datetime(train["date"], errors="coerce")
     train = train.dropna(subset=['date'])
@@ -618,4 +579,5 @@ if __name__ == '__main__':
         run_dashboard(train, min_date, max_date, sort_state)
     elif app_mode == "Time Series Forecast":
         run_forecast_app(model, prophet_df)
+
 
