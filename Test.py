@@ -32,7 +32,7 @@ def load_data():
     try:
         train = pd.read_csv('Data.zip')
     except FileNotFoundError:
-       print('Error When Loading Data')
+       return('Error When Loading Data')
     
     train["date"] = pd.to_datetime(train["date"], errors="coerce")
     train = train.dropna(subset=['date'])
@@ -579,6 +579,7 @@ if __name__ == '__main__':
         run_dashboard(train, min_date, max_date, sort_state)
     elif app_mode == "Time Series Forecast":
         run_forecast_app(model, prophet_df)
+
 
 
 
