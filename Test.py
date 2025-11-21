@@ -483,14 +483,43 @@ def run_forecast_app(model, prophet_df):
                     name='80% Confidence Interval'
                 ))
                 
-                # Highlight the specific prediction point
-                fig_rt.add_trace(go.Scatter(
-                    x=[target_date_dt],
-                    y=[latest['prediction']],
-                    mode='markers',
-                    name='Target Prediction',
-                    marker=dict(color='red', size=12, symbol='star', line=dict(color='white', width=2))
-                ))
+                # Highlight all prediction points from history
+                if st.session_state.real_time_predictions:
+                    # Extract all predictions that fall within or after the forecast range
+                    all_predictions = []
+                    for pred in st.session_state.real_time_predictions:
+                        pred_date = pd.to_datetime(pred['date'])
+                        if pred_date > last_train_date:
+                            all_predictions.append({
+                                'date': pred_date,
+                                'value': pred['prediction']
+                            })
+                    
+                    if all_predictions:
+                        pred_df = pd.DataFrame(all_predictions)
+                        fig_rt.add_trace(go.Scatter(
+                            x=pred_df['date'],
+                            y=pred_df['value'],
+                            mode='markers',
+                            name='Real-Time Predictions',
+                            marker=dict(
+                                color='red', 
+                                size=12, 
+                                symbol='star',
+                                line=dict(color='white', width=2)
+                            ),
+                            hovertemplate='<b>Predicted Date:</b> %{x}<br><b>Value:</b> %{y:,.0f}<extra></extra>'
+                        ))
+                else:
+                    # If no predictions in history, just show the current one
+                    fig_rt.add_trace(go.Scatter(
+                        x=[target_date_dt],
+                        y=[latest['prediction']],
+                        mode='markers',
+                        name='Target Prediction',
+                        marker=dict(color='red', size=12, symbol='star', line=dict(color='white', width=2)),
+                        hovertemplate='<b>Predicted Date:</b> %{x}<br><b>Value:</b> %{y:,.0f}<extra></extra>'
+                    ))
 
                 fig_rt.update_layout(
                     title=f'Historical Data and Forecast to {latest["date"].strftime("%Y-%m-%d")}',
